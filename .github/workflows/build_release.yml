@@ -42,22 +42,28 @@ jobs:
                       exit 1
                     fi
 
-    # Runs on pull requests as a required check without publishing a release.
+    # Pull requests build only the supported arm64-v8a APK; release builds run on manual dispatch.
     pull-request-check:
-        name: Pull request check
+        name: Build arm64-v8a (PR)
         runs-on: ubuntu-latest
+        if: github.event_name == 'pull_request'
+        needs: prepare
         steps:
             -   name: Checkout code
                 uses: actions/checkout@v5
-            -   name: Set up Java
+            -   name: Set up Java and Android SDK
                 uses: actions/setup-java@v4
                 with:
                     java-version: '21'
                     distribution: 'temurin'
-            -   name: Run Foss release checks
+            -   name: Accept Android SDK licenses
+                run: yes | $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager --licenses
+            -   name: Build arm64-v8a release APK
                 run: |
                     chmod +x ./gradlew
-                    ./gradlew lintFossRelease --no-daemon
+                    ./gradlew clean assembleFossRelease \
+                      --init-script .github/init-scripts/abi-arm64-v8a.gradle \
+                      --no-build-cache --rerun-tasks --no-daemon
 
     # Each arch is built in its own job using a Gradle init script that overrides
     # the foss flavor's abiFilters. This avoids android.injected.build.abi, which
