@@ -46,7 +46,6 @@ import app.simple.felicity.managers.LyricsManager
 import app.simple.felicity.preferences.AudioPreferences
 import app.simple.felicity.preferences.LibraryPreferences
 import app.simple.felicity.preferences.ShufflePreferences
-import app.simple.felicity.preferences.TrialPreferences
 import app.simple.felicity.preferences.UserInterfacePreferences
 import app.simple.felicity.repository.constants.MediaConstants
 import app.simple.felicity.repository.database.instances.AudioDatabase
@@ -65,7 +64,6 @@ import app.simple.felicity.ui.home.Dashboard
 import app.simple.felicity.ui.home.SimpleHome
 import app.simple.felicity.ui.home.TiledHome
 import app.simple.felicity.ui.launcher.Setup
-import app.simple.felicity.ui.launcher.TrialExpired
 import app.simple.felicity.ui.panels.Equalizer
 import app.simple.felicity.ui.panels.Selections
 import app.simple.felicity.ui.player.CarouselPlayer
@@ -302,14 +300,8 @@ class MainActivity : BaseActivity(), MiniPlayerCallbacks {
                     .replace(R.id.fragment_container, Setup.newInstance(), Setup.TAG)
                     .commit()
             }
-            TrialPreferences.isTrialExpired() -> {
-                // Trial has expired — show the paywall screen instead of home
-                supportFragmentManager.beginTransaction()
-                    .replace(R.id.fragment_container, TrialExpired.newInstance(), TrialExpired.TAG)
-                    .commit()
-            }
             else -> {
-                // All permissions granted and trial is still active, go directly to home
+                // All permissions granted; the app is permanently unlocked.
                 showHome()
             }
         }
@@ -602,9 +594,6 @@ class MainActivity : BaseActivity(), MiniPlayerCallbacks {
     override fun onSharedPreferenceChanged(sharedPreferences: SharedPreferences?, key: String?) {
         super.onSharedPreferenceChanged(sharedPreferences, key)
         when (key) {
-            TrialPreferences.HAS_LICENSE_KEY -> {
-
-            }
             AudioPreferences.IS_USB_DAC -> {
                 // If the user toggled the USB DAC preference, we need to re-check for a DAC
                 // and re-initialize the audio output path accordingly.
