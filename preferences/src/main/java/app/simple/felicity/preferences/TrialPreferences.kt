@@ -60,8 +60,7 @@ object TrialPreferences {
     }
 
     fun isAppFullVersionEnabled(): Boolean {
-        return SharedPreferences.getEncryptedSharedPreferences().getBoolean(IS_FULL_VERSION_ENABLED, false) ||
-                CalendarUtils.getDaysBetweenTwoDates(Date(getFirstLaunchDate()), CalendarUtils.getToday()) <= MAX_TRIAL_DAYS
+        return true
     }
 
     fun isWithinTrialPeriod(): Boolean {

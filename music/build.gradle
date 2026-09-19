@@ -55,10 +55,7 @@ android {
         foss { // GitHub build
             dimension "type"
 
-            def releaseSigning = signingConfigs.findByName("release")
-            if (releaseSigning != null && releaseSigning.storeFile != null) {
-                signingConfig releaseSigning
-            }
+            signingConfig signingConfigs.debug
 
             ndk {
                 abiFilters "arm64-v8a", "x86_64" // 64bit only
@@ -68,10 +65,7 @@ android {
             dimension "type"
             versionNameSuffix "-play"
 
-            def releaseSigning = signingConfigs.findByName("release")
-            if (releaseSigning != null && releaseSigning.storeFile != null) {
-                signingConfig releaseSigning
-            }
+            signingConfig signingConfigs.debug
 
             ndk {
                 abiFilters "arm64-v8a", "x86_64" // 64bit only
@@ -90,10 +84,8 @@ android {
                 includeInBundle false
             }
 
-            def releaseSigning = signingConfigs.findByName("release")
-            if (releaseSigning != null && releaseSigning.storeFile != null) {
-                signingConfig releaseSigning
-            }
+            // Build a release APK while using Android's standard debug keystore.
+            signingConfig signingConfigs.debug
 
         }
         debug {
