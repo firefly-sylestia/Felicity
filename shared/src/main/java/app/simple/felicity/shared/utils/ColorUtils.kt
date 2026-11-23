@@ -61,6 +61,11 @@ object ColorUtils {
         return changeAlpha(this, alpha)
     }
 
+    fun Int.toQuarterAlpha(): Int {
+        val alpha = Color.alpha(this) / 4
+        return changeAlpha(this, alpha)
+    }
+
     fun Int.toHexColor(): String {
         return String.format("#%06X", 0xFFFFFF and this)
     }
@@ -256,5 +261,12 @@ object ColorUtils {
         val g = (Color.green(colorFrom) * inverseRatio + Color.green(colorTo) * ratio).toInt()
         val b = (Color.blue(colorFrom) * inverseRatio + Color.blue(colorTo) * ratio).toInt()
         return Color.argb(a, r, g, b)
+    }
+
+    /**
+     * Returns true if the color is white or empty (0).
+     */
+    fun Int.isColorWhiteOrEmpty(): Boolean {
+        return this == 0 || this == Color.WHITE
     }
 }

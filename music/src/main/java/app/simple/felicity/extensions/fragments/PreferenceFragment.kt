@@ -4,14 +4,21 @@ import android.content.Intent
 import android.os.Build
 import android.os.Bundle
 import android.text.format.DateUtils
+import android.util.Log
+import android.view.LayoutInflater
 import android.view.View
+import android.view.ViewGroup
 import android.widget.TextView
 import androidx.core.net.toUri
 import androidx.lifecycle.lifecycleScope
 import app.simple.felicity.BuildConfig
 import app.simple.felicity.R
+import app.simple.felicity.adapters.preference.GenericPreferencesAdapter
+import app.simple.felicity.databinding.FragmentPreferenceAppearanceBinding
+import app.simple.felicity.databinding.HeaderPreferencesGenericBinding
 import app.simple.felicity.decorations.seekbars.FelicitySeekbar
 import app.simple.felicity.decorations.toggles.FelicitySwitch
+import app.simple.felicity.decorations.views.AppHeader
 import app.simple.felicity.decorations.views.PopupMenuItem
 import app.simple.felicity.decorations.views.SharedScrollViewPopup
 import app.simple.felicity.enums.PreferenceType
@@ -29,7 +36,9 @@ import app.simple.felicity.preferences.PlayerPreferences
 import app.simple.felicity.preferences.UserInterfacePreferences
 import app.simple.felicity.repository.repositories.SongStatRepository
 import app.simple.felicity.repository.services.AudioDatabaseService
+import app.simple.felicity.theme.accents.AlbumArt
 import app.simple.felicity.ui.preferences.sub.AccentColors
+import app.simple.felicity.ui.preferences.sub.ArtistWhitelist
 import app.simple.felicity.ui.preferences.sub.Language
 import app.simple.felicity.ui.preferences.sub.MusicFolders
 import app.simple.felicity.ui.preferences.sub.PanelVisibility
@@ -45,6 +54,51 @@ import java.util.function.Supplier
 @Suppress("unused")
 abstract class PreferenceFragment : MediaFragment() {
 
+    private var _binding: FragmentPreferenceAppearanceBinding? = null
+    protected val binding: FragmentPreferenceAppearanceBinding
+        get() = _binding!!
+
+    private var _headerBinding: HeaderPreferencesGenericBinding? = null
+    protected val headerBinding: HeaderPreferencesGenericBinding
+        get() = _headerBinding!!
+
+    protected open val titleRes: Int = 0
+    protected open val iconRes: Int = 0
+
+    override val wantsMiniPlayerVisible: Boolean
+        get() = false
+
+    protected open fun getPreferencesList(): List<Preference> = emptyList()
+
+    override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View? {
+        if (titleRes != 0) {
+            _binding = FragmentPreferenceAppearanceBinding.inflate(inflater, container, false)
+            _headerBinding = HeaderPreferencesGenericBinding.inflate(inflater, container, false)
+            return _binding!!.root
+        }
+        return super.onCreateView(inflater, container, savedInstanceState)
+    }
+
+    override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
+        super.onViewCreated(view, savedInstanceState)
+        requireHiddenMiniPlayer()
+
+        if (titleRes != 0) {
+            _headerBinding?.title?.text = getString(titleRes)
+            _headerBinding?.icon?.setImageResource(iconRes)
+            _binding?.header?.setContentView(_headerBinding!!.root)
+            _binding?.recyclerView?.setHasFixedSize(false)
+            _binding?.recyclerView?.adapter = GenericPreferencesAdapter(getPreferencesList())
+            _binding?.header?.attachTo(_binding!!.recyclerView, AppHeader.ScrollMode.HIDE_ON_SCROLL)
+        }
+    }
+
+    override fun onDestroyView() {
+        super.onDestroyView()
+        _binding = null
+        _headerBinding = null
+    }
+
     /**
      * Bookmarks:
      * Appearance Preferences: [createAppearancePanel]
@@ -56,11 +110,6 @@ abstract class PreferenceFragment : MediaFragment() {
      * Accessibility Preferences: [createAccessibilityPanel]
      * About Preferences: [createAboutPanel]
      */
-
-    override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
-        super.onViewCreated(view, savedInstanceState)
-        requireHiddenMiniPlayer()
-    }
 
     protected fun createAppearancePanel(): List<Preference> {
         val preferences = mutableListOf<Preference>()
@@ -84,6 +133,47 @@ abstract class PreferenceFragment : MediaFragment() {
                 type = PreferenceType.PANEL,
                 onPreferenceAction = { view, callback ->
                     openFragment(AccentColors.newInstance(), AccentColors.TAG)
+                }
+        )
+
+        val albumArtPaletteStyle = Preference(
+                title = R.string.album_art_palette_style,
+                summary = R.string.album_art_palette_style_summary,
+                icon = R.drawable.ic_tonality,
+                type = PreferenceType.POPUP,
+                valueProvider = {
+                    when (AlbumArtPreferences.getPaletteStyle()) {
+                        AlbumArtPreferences.PALETTE_STYLE_PASTEL -> getString(R.string.album_art_palette_style_pastel)
+                        AlbumArtPreferences.PALETTE_STYLE_CHIC -> getString(R.string.album_art_palette_style_chic)
+                        else -> getString(R.string.album_art_palette_style_retro)
+                    }
+                },
+                onPreferenceAction = { view, callback ->
+                    SharedScrollViewPopup(
+                            container = requireContainerView(),
+                            anchorView = view,
+                            menuItems = listOf(
+                                    PopupMenuItem(title = R.string.album_art_palette_style_pastel),
+                                    PopupMenuItem(title = R.string.album_art_palette_style_chic),
+                                    PopupMenuItem(title = R.string.album_art_palette_style_retro)
+                            ),
+                            onMenuItemClick = {
+                                when (it) {
+                                    R.string.album_art_palette_style_pastel -> {
+                                        AlbumArtPreferences.setPaletteStyle(AlbumArtPreferences.PALETTE_STYLE_PASTEL)
+                                        (view as TextView).text = getString(R.string.album_art_palette_style_pastel)
+                                    }
+                                    R.string.album_art_palette_style_chic -> {
+                                        AlbumArtPreferences.setPaletteStyle(AlbumArtPreferences.PALETTE_STYLE_CHIC)
+                                        (view as TextView).text = getString(R.string.album_art_palette_style_chic)
+                                    }
+                                    R.string.album_art_palette_style_retro -> {
+                                        AlbumArtPreferences.setPaletteStyle(AlbumArtPreferences.PALETTE_STYLE_RETRO)
+                                        (view as TextView).text = getString(R.string.album_art_palette_style_retro)
+                                    }
+                                }
+                            }
+                    ).show()
                 }
         )
 
@@ -222,6 +312,9 @@ abstract class PreferenceFragment : MediaFragment() {
         preferences.add(colors)
         preferences.add(themes)
         preferences.add(accentColor)
+        if (AppearancePreferences.getAccentColorName() == AlbumArt.IDENTIFIER) {
+            preferences.add(albumArtPaletteStyle)
+        }
         preferences.add(font)
         preferences.add(typeface)
         preferences.add(header)
@@ -305,6 +398,26 @@ abstract class PreferenceFragment : MediaFragment() {
         )
 
         val miniPlayerHeader = Preference(type = PreferenceType.SUB_HEADER, title = R.string.miniplayer)
+
+        val miniplayerWidth = Preference(
+                title = R.string.miniplayer_width,
+                summary = R.string.miniplayer_width_summary,
+                icon = -1,
+                type = PreferenceType.SLIDER,
+                onPreferenceAction = { view, callback ->
+                    UserInterfacePreferences.setMiniplayerWidth((view as FelicitySeekbar).getProgress())
+                },
+                valueProvider = Supplier {
+                    SeekbarState(
+                            position = UserInterfacePreferences.getMiniplayerWidth(),
+                            max = UserInterfacePreferences.MAX_LANDSCAPE_MINIPLAYER_WIDTH,
+                            min = UserInterfacePreferences.MIN_LANDSCAPE_MINIPLAYER_WIDTH,
+                            default = UserInterfacePreferences.DEFAULT_LANDSCAPE_MINIPLAYER_WIDTH,
+                            leftLabel = false,
+                            rightLabel = false,
+                    )
+                }
+        )
 
         val marginAroundMiniplayerToggle = Preference(
                 title = R.string.margin_around_miniplayer,
@@ -390,6 +503,32 @@ abstract class PreferenceFragment : MediaFragment() {
                 }
         )
 
+        val showForwardAndRewindButtons = Preference(
+                title = R.string.show_forward_rewind_buttons,
+                summary = R.string.show_forward_rewind_buttons_summary,
+                icon = R.drawable.ic_fast_forward,
+                type = PreferenceType.SWITCH,
+                onPreferenceAction = { view, callback ->
+                    UserInterfacePreferences.setForwardRewindButtons((view as FelicitySwitch).isChecked)
+                },
+                valueProvider = Supplier {
+                    UserInterfacePreferences.isForwardRewindButtons()
+                }
+        )
+
+        val immersiveMode = Preference(
+                title = R.string.immersive_mode,
+                summary = R.string.immersive_mode_summary,
+                icon = R.drawable.ic_fullscreen,
+                type = PreferenceType.SWITCH,
+                onPreferenceAction = { view, callback ->
+                    UserInterfacePreferences.setImmersiveMode((view as FelicitySwitch).isChecked)
+                },
+                valueProvider = Supplier {
+                    UserInterfacePreferences.isImmersiveMode()
+                }
+        )
+
         val pagesHeader = Preference(type = PreferenceType.SUB_HEADER, title = R.string.pages)
 
         val songsFirstToggle = Preference(
@@ -433,6 +572,107 @@ abstract class PreferenceFragment : MediaFragment() {
                 }
         )
 
+        val volumeKnobPosition = Preference(
+                title = R.string.volume_knob_position,
+                summary = R.string.volume_knob_position_summary,
+                icon = R.drawable.ic_align_center,
+                type = PreferenceType.POPUP,
+                valueProvider = {
+                    when (UserInterfacePreferences.getVolumeKnobPosition()) {
+                        UserInterfacePreferences.VOLUME_KNOB_POSITION_LEFT -> getString(R.string.left)
+                        UserInterfacePreferences.VOLUME_KNOB_POSITION_CENTER -> getString(R.string.center)
+                        UserInterfacePreferences.VOLUME_KNOB_POSITION_RIGHT -> getString(R.string.right)
+                        else -> getString(R.string.center)
+                    }
+                },
+                onPreferenceAction = { view, _ ->
+                    SharedScrollViewPopup(
+                            container = requireContainerView(),
+                            anchorView = view,
+                            menuItems = listOf(
+                                    PopupMenuItem(title = R.string.left),
+                                    PopupMenuItem(title = R.string.center),
+                                    PopupMenuItem(title = R.string.right)
+                            ),
+                            onMenuItemClick = {
+                                when (it) {
+                                    R.string.left -> {
+                                        UserInterfacePreferences.setVolumeKnobPosition(
+                                                UserInterfacePreferences.VOLUME_KNOB_POSITION_LEFT)
+                                        (view as TextView).text = getString(R.string.left)
+                                    }
+                                    R.string.center -> {
+                                        UserInterfacePreferences.setVolumeKnobPosition(
+                                                UserInterfacePreferences.VOLUME_KNOB_POSITION_CENTER)
+                                        (view as TextView).text = getString(R.string.center)
+                                    }
+                                    R.string.right -> {
+                                        UserInterfacePreferences.setVolumeKnobPosition(
+                                                UserInterfacePreferences.VOLUME_KNOB_POSITION_RIGHT)
+                                        (view as TextView).text = getString(R.string.right)
+                                    }
+                                }
+                            },
+                            onDismiss = {}
+                    ).show()
+                }
+        )
+
+        val weatherEffect = Preference(
+                title = R.string.weather_effect,
+                summary = R.string.weather_effect_summary,
+                icon = R.drawable.ic_cloud,
+                type = PreferenceType.POPUP,
+                valueProvider = {
+                    when (UserInterfacePreferences.getWeatherEffect()) {
+                        UserInterfacePreferences.WEATHER_EFFECT_OFF -> getString(R.string.off)
+                        UserInterfacePreferences.WEATHER_EFFECT_AUTO -> getString(R.string.auto)
+                        UserInterfacePreferences.WEATHER_EFFECT_WINTER -> getString(R.string.winter)
+                        UserInterfacePreferences.WEATHER_EFFECT_AUTUMN -> getString(R.string.autumn)
+                        UserInterfacePreferences.WEATHER_EFFECT_SUMMER -> getString(R.string.summer)
+                        else -> getString(R.string.auto)
+                    }
+                },
+                onPreferenceAction = { view, _ ->
+                    SharedScrollViewPopup(
+                            container = requireContainerView(),
+                            anchorView = view,
+                            menuItems = listOf(
+                                    PopupMenuItem(title = R.string.off),
+                                    PopupMenuItem(title = R.string.auto),
+                                    PopupMenuItem(title = R.string.winter),
+                                    PopupMenuItem(title = R.string.autumn),
+                                    PopupMenuItem(title = R.string.summer)
+                            ),
+                            onMenuItemClick = {
+                                when (it) {
+                                    R.string.off -> {
+                                        UserInterfacePreferences.setWeatherEffect(UserInterfacePreferences.WEATHER_EFFECT_OFF)
+                                        (view as TextView).text = getString(R.string.off)
+                                    }
+                                    R.string.auto -> {
+                                        UserInterfacePreferences.setWeatherEffect(UserInterfacePreferences.WEATHER_EFFECT_AUTO)
+                                        (view as TextView).text = getString(R.string.auto)
+                                    }
+                                    R.string.winter -> {
+                                        UserInterfacePreferences.setWeatherEffect(UserInterfacePreferences.WEATHER_EFFECT_WINTER)
+                                        (view as TextView).text = getString(R.string.winter)
+                                    }
+                                    R.string.autumn -> {
+                                        UserInterfacePreferences.setWeatherEffect(UserInterfacePreferences.WEATHER_EFFECT_AUTUMN)
+                                        (view as TextView).text = getString(R.string.autumn)
+                                    }
+                                    R.string.summer -> {
+                                        UserInterfacePreferences.setWeatherEffect(UserInterfacePreferences.WEATHER_EFFECT_SUMMER)
+                                        (view as TextView).text = getString(R.string.summer)
+                                    }
+                                }
+                            },
+                            onDismiss = {}
+                    ).show()
+                }
+        )
+
         preferences.add(homeHeader)
         preferences.add(panelVisibility)
         preferences.add(homeInterface)
@@ -440,13 +680,18 @@ abstract class PreferenceFragment : MediaFragment() {
         preferences.add(playerInterface)
         preferences.add(lyricsToggle)
         preferences.add(stackMediaControlsToggle)
+        preferences.add(showForwardAndRewindButtons)
+        preferences.add(immersiveMode)
         preferences.add(pagesHeader)
         preferences.add(songsFirstToggle)
         preferences.add(miniPlayerHeader)
+        preferences.add(miniplayerWidth)
         preferences.add(marginAroundMiniplayerToggle)
         preferences.add(applicationHeader)
         preferences.add(likeButton)
         preferences.add(volumeControls)
+        preferences.add(volumeKnobPosition)
+        preferences.add(weatherEffect)
 
         return preferences
     }
@@ -806,6 +1051,115 @@ abstract class PreferenceFragment : MediaFragment() {
                 }
         )
 
+        val crossfadeHeader = Preference(type = PreferenceType.SUB_HEADER, title = R.string.crossfade)
+
+        val crossfadeToggle = Preference(
+                title = R.string.crossfade,
+                summary = R.string.crossfade_summary,
+                icon = R.drawable.ic_join_right,
+                type = PreferenceType.SWITCH,
+                onPreferenceAction = { view, callback ->
+                    AudioPreferences.setCrossfadeEnabled((view as FelicitySwitch).isChecked)
+                },
+                valueProvider = Supplier {
+                    AudioPreferences.isCrossfadeEnabled()
+                }
+        )
+
+        val crossfadeManualSkipToggle = Preference(
+                title = R.string.crossfade_manual_skips,
+                summary = R.string.crossfade_manual_skips_summary,
+                icon = -1,
+                type = PreferenceType.SWITCH,
+                onPreferenceAction = { view, callback ->
+                    AudioPreferences.setCrossfadeManualSkip((view as FelicitySwitch).isChecked)
+                },
+                valueProvider = Supplier {
+                    AudioPreferences.isCrossfadeManualSkipEnabled()
+                }
+        )
+
+        val crossfadeDurationSlider = Preference(
+                title = R.string.crossfade_duration,
+                summary = R.string.crossfade_duration_summary,
+                icon = R.drawable.ic_timelapse,
+                type = PreferenceType.SLIDER,
+                valueProvider = {
+                    Log.d(TAG, AudioPreferences.getCrossfadeDuration().toString())
+                    SeekbarState(
+                            position = AudioPreferences.getCrossfadeDuration().toFloat(),
+                            max = 10000F,
+                            min = 1000F,
+                            stepSize = 500F,
+                            default = AudioPreferences.DEFAULT_CROSSFADE_DURATION.toFloat(),
+                            leftLabel = false,
+                            rightLabel = true,
+                            rightLabelProvider = { progress, _, _ ->
+                                String.format(Locale.getDefault(), "%.1f s", progress / 1000f)
+                            },
+                    )
+                },
+                onPreferenceAction = { view, _ ->
+                    AudioPreferences.setCrossfadeDuration((view as FelicitySeekbar).getProgress().toLong())
+                }
+        )
+
+        val visualizerHeader = Preference(type = PreferenceType.SUB_HEADER, title = R.string.visualizer)
+
+        val fftResolutionPopup = Preference(
+                title = R.string.fft_resolution,
+                summary = R.string.fft_resolution_summary,
+                icon = R.drawable.ic_graphic_eq,
+                type = PreferenceType.POPUP,
+                valueProvider = {
+                    when (AudioPreferences.getFftResolution()) {
+                        AudioPreferences.FFT_RESOLUTION_VERY_LOW -> getString(R.string.fft_resolution_very_low)
+                        AudioPreferences.FFT_RESOLUTION_LOW -> getString(R.string.fft_resolution_low)
+                        AudioPreferences.FFT_RESOLUTION_HIGH -> getString(R.string.fft_resolution_high)
+                        AudioPreferences.FFT_RESOLUTION_ULTRA -> getString(R.string.fft_resolution_ultra)
+                        else -> getString(R.string.fft_resolution_normal)
+                    }
+                },
+                onPreferenceAction = { view, _ ->
+                    SharedScrollViewPopup(
+                            container = requireContainerView(),
+                            anchorView = view,
+                            menuItems = listOf(
+                                    PopupMenuItem(title = R.string.fft_resolution_very_low),
+                                    PopupMenuItem(title = R.string.fft_resolution_low),
+                                    PopupMenuItem(title = R.string.fft_resolution_normal),
+                                    PopupMenuItem(title = R.string.fft_resolution_high),
+                                    PopupMenuItem(title = R.string.fft_resolution_ultra)
+                            ),
+                            onMenuItemClick = {
+                                when (it) {
+                                    R.string.fft_resolution_very_low -> {
+                                        AudioPreferences.setFftResolution(AudioPreferences.FFT_RESOLUTION_VERY_LOW)
+                                        (view as TextView).text = getString(R.string.fft_resolution_very_low)
+                                    }
+                                    R.string.fft_resolution_low -> {
+                                        AudioPreferences.setFftResolution(AudioPreferences.FFT_RESOLUTION_LOW)
+                                        (view as TextView).text = getString(R.string.fft_resolution_low)
+                                    }
+                                    R.string.fft_resolution_high -> {
+                                        AudioPreferences.setFftResolution(AudioPreferences.FFT_RESOLUTION_HIGH)
+                                        (view as TextView).text = getString(R.string.fft_resolution_high)
+                                    }
+                                    R.string.fft_resolution_ultra -> {
+                                        AudioPreferences.setFftResolution(AudioPreferences.FFT_RESOLUTION_ULTRA)
+                                        (view as TextView).text = getString(R.string.fft_resolution_ultra)
+                                    }
+                                    else -> {
+                                        AudioPreferences.setFftResolution(AudioPreferences.FFT_RESOLUTION_NORMAL)
+                                        (view as TextView).text = getString(R.string.fft_resolution_normal)
+                                    }
+                                }
+                            },
+                            onDismiss = {}
+                    ).show()
+                }
+        )
+
         val playbackHeader = Preference(type = PreferenceType.SUB_HEADER, title = R.string.playback)
 
         val stereoDownmixing = Preference(
@@ -919,6 +1273,12 @@ abstract class PreferenceFragment : MediaFragment() {
             preferences.add(usbDacControl)
         }
         preferences.add(hiresToggle)
+        preferences.add(crossfadeHeader)
+        preferences.add(crossfadeToggle)
+        preferences.add(crossfadeDurationSlider)
+        preferences.add(crossfadeManualSkipToggle)
+        preferences.add(visualizerHeader)
+        preferences.add(fftResolutionPopup)
         preferences.add(playbackHeader)
         preferences.add(stereoDownmixing)
         preferences.add(gaplessToggle)
@@ -1046,6 +1406,16 @@ abstract class PreferenceFragment : MediaFragment() {
                 },
                 valueProvider = Supplier {
                     LibraryPreferences.isAlbumArtistOverArtist()
+                }
+        )
+
+        val artistWhitelist = Preference(
+                title = R.string.artist_whitelist,
+                summary = R.string.artist_whitelist_desc,
+                icon = R.drawable.ic_artist,
+                type = PreferenceType.PANEL,
+                onPreferenceAction = { view, callback ->
+                    openFragment(ArtistWhitelist.newInstance(), ArtistWhitelist.TAG)
                 }
         )
 
@@ -1187,6 +1557,7 @@ abstract class PreferenceFragment : MediaFragment() {
         preferences.add(confirmQueueReplacementToggle)
         preferences.add(metadataHeader)
         preferences.add(albumArtistsInsteadOfArtists)
+        preferences.add(artistWhitelist)
         preferences.add(musicBrainz)
         preferences.add(albumArtHeader)
         preferences.add(mediaStoreArt)
@@ -1339,5 +1710,9 @@ abstract class PreferenceFragment : MediaFragment() {
         preferences.add(telegram)
 
         return preferences
+    }
+
+    companion object {
+        private const val TAG = "PreferenceFragment"
     }
 }

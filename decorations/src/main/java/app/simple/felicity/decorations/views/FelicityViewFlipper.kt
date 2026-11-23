@@ -2,11 +2,19 @@ package app.simple.felicity.decorations.views
 
 import android.content.Context
 import android.util.AttributeSet
+import android.view.Gravity
 import android.view.MotionEvent
 import android.view.VelocityTracker
+import android.view.View
 import android.view.ViewConfiguration
 import android.view.ViewGroup
-import android.view.animation.DecelerateInterpolator
+import androidx.core.content.withStyledAttributes
+import androidx.core.view.isGone
+import androidx.dynamicanimation.animation.DynamicAnimation
+import androidx.dynamicanimation.animation.SpringAnimation
+import androidx.dynamicanimation.animation.SpringForce
+import app.simple.felicity.shared.utils.ScrollingUtils
+import java.util.WeakHashMap
 import kotlin.math.abs
 
 /**
@@ -52,12 +60,7 @@ class FelicityViewFlipper @JvmOverloads constructor(
      */
     private val snapThreshold = 0.35f
 
-    /**
-     * Duration in milliseconds for the settle animation after a drag or fling.
-     */
-    private val settleDurationMs = 280L
-
-    private val decelerateInterpolator = DecelerateInterpolator(1.5f)
+    private val springAnimations = WeakHashMap<View, SpringAnimation>()
 
     /**
      * The index of the currently visible child view. Setting this programmatically
@@ -72,6 +75,20 @@ class FelicityViewFlipper @JvmOverloads constructor(
             }
         }
 
+    var gravity: Int = Gravity.TOP
+        set(value) {
+            if (field != value) {
+                field = value
+                requestLayout()
+            }
+        }
+
+    init {
+        context.withStyledAttributes(attrs, intArrayOf(android.R.attr.gravity), defStyleAttr, 0) {
+            gravity = getInt(0, Gravity.TOP)
+        }
+    }
+
     /**
      * Registers [listener] to be called whenever the displayed child changes, either by
      * user swipe or a programmatic [displayedChild] assignment.
@@ -83,23 +100,74 @@ class FelicityViewFlipper @JvmOverloads constructor(
     }
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
-        val w = MeasureSpec.getSize(widthMeasureSpec)
-        val h = MeasureSpec.getSize(heightMeasureSpec)
+        val widthSize = MeasureSpec.getSize(widthMeasureSpec)
+        val heightMode = MeasureSpec.getMode(heightMeasureSpec)
+        val heightSize = MeasureSpec.getSize(heightMeasureSpec)
 
-        val childWidthSpec = MeasureSpec.makeMeasureSpec(w, MeasureSpec.EXACTLY)
-        val childHeightSpec = MeasureSpec.makeMeasureSpec(h, MeasureSpec.EXACTLY)
+        var desiredHeight = 0
+
+        // Measure children to find the maximum height required
+        val childWidthSpec = MeasureSpec.makeMeasureSpec(widthSize, MeasureSpec.EXACTLY)
+
         for (i in 0 until childCount) {
-            getChildAt(i).measure(childWidthSpec, childHeightSpec)
+            val child = getChildAt(i)
+            if (child.visibility != GONE) {
+                val lp = child.layoutParams
+                // Respect the parent's constraints but let the child decide its initial size
+                val initialChildHeightSpec = getChildMeasureSpec(heightMeasureSpec, 0, lp.height)
+                child.measure(childWidthSpec, initialChildHeightSpec)
+                desiredHeight = maxOf(desiredHeight, child.measuredHeight)
+            }
         }
-        setMeasuredDimension(w, h)
+
+        // Determine the final height for the ViewFlipper (prevents height jumping on swipe)
+        val finalHeight = if (heightMode == MeasureSpec.EXACTLY) {
+            heightSize
+        } else {
+            desiredHeight
+        }
+
+        // Remeasure children using the final fixed height of the ViewFlipper
+        val finalParentHeightSpec = MeasureSpec.makeMeasureSpec(finalHeight, MeasureSpec.EXACTLY)
+
+        for (i in 0 until childCount) {
+            val child = getChildAt(i)
+            if (child.visibility != GONE) {
+                val lp = child.layoutParams
+
+                // This is the key part:
+                // - If child is match_parent, it gets EXACTLY finalHeight.
+                // - If child is wrap_content, it gets AT_MOST finalHeight (so it can be smaller and centered).
+                val finalChildHeightSpec = getChildMeasureSpec(finalParentHeightSpec, 0, lp.height)
+
+                child.measure(childWidthSpec, finalChildHeightSpec)
+            }
+        }
+
+        setMeasuredDimension(widthSize, finalHeight)
     }
 
     override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
         val pageWidth = r - l
         val pageHeight = b - t
+
         for (i in 0 until childCount) {
             val child = getChildAt(i)
-            child.layout(0, 0, pageWidth, pageHeight)
+            if (child.isGone) continue
+
+            val childHeight = child.measuredHeight
+
+            // Determine vertical offset based on gravity
+            val childTop = when (gravity and Gravity.VERTICAL_GRAVITY_MASK) {
+                Gravity.CENTER_VERTICAL -> (pageHeight - childHeight) / 2
+                Gravity.BOTTOM -> pageHeight - childHeight
+                else -> 0 // Set top offset to 0 pixels
+            }
+
+            // Layout the child with the calculated vertical offset
+            child.layout(0, childTop, pageWidth, childTop + childHeight)
+
+            // Apply horizontal swipe offset
             child.translationX = (i - currentIndex) * pageWidth.toFloat() + dragOffset
         }
     }
@@ -115,14 +183,26 @@ class FelicityViewFlipper @JvmOverloads constructor(
                 velocityTracker?.recycle()
                 velocityTracker = VelocityTracker.obtain()
                 velocityTracker?.addMovement(ev)
+
+                // Cancel any ongoing spring animations
+                for (i in 0 until childCount) {
+                    springAnimations[getChildAt(i)]?.cancel()
+                }
             }
 
             MotionEvent.ACTION_MOVE -> {
                 velocityTracker?.addMovement(ev)
                 val dx = abs(ev.x - downX)
                 val dy = abs(ev.y - downY)
+                val rawDx = (ev.x - lastX).toInt()
                 if (!isHorizontalDrag && dx > touchSlop) {
                     if (dx > dy) {
+                        if (canScroll(this, false, rawDx, ev.x.toInt(), ev.y.toInt())) {
+                            // The nested child can handle this horizontal scroll
+                            downX = ev.x // reset downX so it doesn't immediately intercept if user reverses direction
+                            lastX = ev.x
+                            return false
+                        }
                         isHorizontalDrag = true
                         isDragging = true
                         parent?.requestDisallowInterceptTouchEvent(true)
@@ -139,6 +219,26 @@ class FelicityViewFlipper @JvmOverloads constructor(
             }
         }
         return false
+    }
+
+    /**
+     * Tests scrollability within child views of v given a delta of dx.
+     */
+    private fun canScroll(v: View, checkV: Boolean, dx: Int, x: Int, y: Int): Boolean {
+        if (v is ViewGroup) {
+            val scrollX = v.scrollX
+            val scrollY = v.scrollY
+            val count = v.childCount
+            for (i in count - 1 downTo 0) {
+                val child = v.getChildAt(i)
+                if (x + scrollX >= child.left && x + scrollX < child.right &&
+                        y + scrollY >= child.top && y + scrollY < child.bottom &&
+                        canScroll(child, true, dx, x + scrollX - child.left, y + scrollY - child.top)) {
+                    return true
+                }
+            }
+        }
+        return checkV && v.canScrollHorizontally(-dx)
     }
 
     override fun performClick(): Boolean {
@@ -160,6 +260,11 @@ class FelicityViewFlipper @JvmOverloads constructor(
                     velocityTracker = VelocityTracker.obtain()
                 }
                 velocityTracker?.addMovement(ev)
+
+                // Cancel any ongoing spring animations
+                for (i in 0 until childCount) {
+                    springAnimations[getChildAt(i)]?.cancel()
+                }
                 return true
             }
 
@@ -203,7 +308,7 @@ class FelicityViewFlipper @JvmOverloads constructor(
                         else -> currentIndex
                     }
 
-                    commitPageChange(nextIndex)
+                    commitPageChange(nextIndex, velX)
                 } else {
                     performClick()
                 }
@@ -239,11 +344,11 @@ class FelicityViewFlipper @JvmOverloads constructor(
      * Commits a page change to [targetIndex], animating all children from their current
      * (potentially mid-drag) [translationX] to their final resting positions.
      */
-    private fun commitPageChange(targetIndex: Int) {
+    private fun commitPageChange(targetIndex: Int, velocity: Float = 0f) {
         val oldIndex = currentIndex
         currentIndex = targetIndex.coerceIn(0, (childCount - 1).coerceAtLeast(0))
         dragOffset = 0f
-        animateToCurrentIndex()
+        animateToCurrentIndex(velocity)
         if (currentIndex != oldIndex) {
             onScreenChangedListener?.invoke(currentIndex)
         }
@@ -256,28 +361,45 @@ class FelicityViewFlipper @JvmOverloads constructor(
     private fun applyTranslations() {
         val pageWidth = width.toFloat()
         if (pageWidth == 0f) return
+
+        var boundedDragOffset = dragOffset
+        if (currentIndex == 0 && dragOffset > 0) {
+            boundedDragOffset = ScrollingUtils.calculateRubberBandOffset(dragOffset, pageWidth)
+        } else if (currentIndex == childCount - 1 && dragOffset < 0) {
+            boundedDragOffset = ScrollingUtils.calculateRubberBandOffset(dragOffset, pageWidth)
+        }
+
         for (i in 0 until childCount) {
-            getChildAt(i).translationX = (i - currentIndex) * pageWidth + dragOffset
+            getChildAt(i).translationX = (i - currentIndex) * pageWidth + boundedDragOffset
         }
     }
 
     /**
-     * Animates all children to their final positions for [currentIndex] with a smooth
-     * decelerate interpolation. Any in-progress animator on each child is replaced.
+     * Animates all children to their final positions for [currentIndex] using SpringAnimation.
      */
-    private fun animateToCurrentIndex() {
+    private fun animateToCurrentIndex(velocity: Float = 0f) {
         val pageWidth = width.toFloat()
         if (pageWidth == 0f) {
             applyTranslations()
             return
         }
         for (i in 0 until childCount) {
+            val child = getChildAt(i)
             val targetX = (i - currentIndex) * pageWidth
-            getChildAt(i).animate()
-                .translationX(targetX)
-                .setDuration(settleDurationMs)
-                .setInterpolator(decelerateInterpolator)
-                .start()
+
+            var springAnim = springAnimations[child]
+            if (springAnim == null) {
+                springAnim = SpringAnimation(child, DynamicAnimation.TRANSLATION_X)
+                springAnimations[child] = springAnim
+            }
+
+            val springForce = SpringForce(targetX)
+                .setStiffness(SpringForce.STIFFNESS_LOW)
+                .setDampingRatio(SpringForce.DAMPING_RATIO_NO_BOUNCY)
+
+            springAnim.spring = springForce
+            springAnim.setStartVelocity(velocity)
+            springAnim.start()
         }
     }
 }

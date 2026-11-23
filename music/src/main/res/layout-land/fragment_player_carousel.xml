@@ -18,25 +18,36 @@
         android:orientation="vertical"
         app:layout_constraintGuide_percent="0.5" />
 
-    <!--
-        Pager occupies 60% of the total screen width starting from the left edge.
-        The left-to-right fade combined with the overlapping seekbar creates the fading effect.
-    -->
-    <app.simple.felicity.decorations.pager.FelicityPager
-        android:id="@+id/pager"
+    <FrameLayout
+        android:id="@+id/frameLayout"
         android:layout_width="0dp"
         android:layout_height="0dp"
-        app:carouselPageSpacing="4dp"
-        app:carouselShowSidePages="true"
-        app:carouselSideScaleDp="0dp"
-        app:fadeEnabled="false"
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintEnd_toStartOf="@+id/menu_strip"
         app:layout_constraintHorizontal_bias="0"
         app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toTopOf="parent"
-        app:pagerMode="carousel"
-        app:slideDirection="vertical" />
+        app:layout_constraintTop_toTopOf="parent">
+
+        <app.simple.felicity.decorations.pager.FelicityPager
+            android:id="@+id/pager"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            app:carouselPageSpacing="4dp"
+            app:carouselShowSidePages="true"
+            app:carouselSideScaleDp="0dp"
+            app:fadeEnabled="false"
+            app:pagerMode="carousel"
+            app:slideDirection="vertical" />
+
+        <app.simple.felicity.decorations.lrc.view.LrcLineView
+            android:id="@+id/lrc"
+            android:layout_margin="@dimen/padding_15"
+            android:layout_width="match_parent"
+            android:padding="@dimen/padding_5"
+            android:layout_gravity="bottom"
+            android:layout_height="wrap_content" />
+
+    </FrameLayout>
 
     <app.simple.felicity.decorations.padding.NonThemePaddingAwareLinearLayout
         android:id="@+id/menu_strip"
@@ -86,6 +97,14 @@
             app:buttonTintType="regular" />
 
         <app.simple.felicity.decorations.ripple.DynamicRippleImageButton
+            android:id="@+id/sleepTimer"
+            android:layout_width="@dimen/button_size"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:src="@drawable/ic_timer"
+            app:buttonTintType="regular" />
+
+        <app.simple.felicity.decorations.ripple.DynamicRippleImageButton
             android:id="@+id/menu"
             android:layout_width="@dimen/button_size"
             android:layout_height="0dp"
@@ -107,11 +126,10 @@
         android:alpha="0.25"
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintEnd_toStartOf="@+id/menu_strip"
-        app:layout_constraintStart_toStartOf="@+id/pager"
+        app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toTopOf="parent"
         app:vizDirection="bottom_to_top"
-        app:vizMaxRenderHeight="0.25"
-        app:vizParticlesEnabled="true" />
+        app:vizMaxRenderHeight="0.25" />
 
     <!--
         Right-side content container spanning from the 40% guideline to the right edge
@@ -132,15 +150,9 @@
 
         <LinearLayout
             android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_gravity="bottom"
+            android:layout_height="0dp"
+            android:layout_weight="1"
             android:orientation="vertical">
-
-            <app.simple.felicity.decorations.lrc.view.LrcLineView
-                android:id="@+id/lrc"
-                android:layout_margin="@dimen/padding_15"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content" />
 
             <LinearLayout
                 android:layout_width="match_parent"
@@ -157,19 +169,6 @@
                     android:layout_gravity="center_vertical"
                     android:paddingHorizontal="@dimen/padding_10"
                     android:paddingVertical="@dimen/padding_5"
-                    app:appFontStyle="bold"
-                    app:highlightMode="auto"
-                    app:textColorStyle="primary" />
-
-                <app.simple.felicity.decorations.highlight.HighlightTextView
-                    android:id="@+id/lyrics"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_gravity="center_vertical"
-                    android:layout_marginStart="@dimen/padding_5"
-                    android:paddingHorizontal="@dimen/padding_10"
-                    android:paddingVertical="@dimen/padding_5"
-                    android:text="@string/lyrics"
                     app:appFontStyle="bold"
                     app:highlightMode="auto"
                     app:textColorStyle="primary" />
@@ -275,8 +274,7 @@
         <app.simple.felicity.decorations.views.FlexStackLayout
             android:id="@+id/seekbar_container"
             android:layout_width="match_parent"
-            android:layout_height="0dp"
-            android:layout_weight="1"
+            android:layout_height="wrap_content"
             android:layout_gravity="bottom">
 
             <app.simple.felicity.decorations.seekbars.WaveformSeekbar
@@ -317,11 +315,11 @@
                     android:clipToPadding="false" />
 
                 <app.simple.felicity.decorations.ripple.DynamicRippleImageButton
-                    android:id="@+id/queue"
+                    android:id="@+id/lyrics"
                     android:layout_width="@dimen/button_size"
                     android:layout_height="@dimen/button_size"
                     android:layout_gravity="center_vertical"
-                    android:src="@drawable/ic_queue"
+                    android:src="@drawable/ic_lyrics"
                     app:buttonTintType="regular" />
 
             </LinearLayout>

@@ -4,7 +4,6 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import app.simple.felicity.decorations.lrc.model.LrcData
-import app.simple.felicity.decorations.lrc.model.LrcEntry
 import app.simple.felicity.decorations.lrc.parser.ILyricsParser
 import app.simple.felicity.decorations.lrc.parser.LrcParser
 import app.simple.felicity.decorations.lrc.parser.LyricsParseException
@@ -15,6 +14,7 @@ import app.simple.felicity.managers.LyricsManager.Companion.SYNC_SAVE_DEBOUNCE_M
 import app.simple.felicity.preferences.LyricsPreferences
 import app.simple.felicity.repository.models.Audio
 import app.simple.felicity.repository.repositories.LrcRepository
+import app.simple.felicity.repository.utils.toLyricsErrorCode
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -26,6 +26,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlin.math.abs
 
 /**
  * A single place where all lyrics data lives for the currently playing song.
@@ -44,10 +45,6 @@ class LyricsManager @Inject constructor(
 ) {
 
     private val TAG = "LyricsManager"
-
-    private val EMPTY_LRC_DATA = LrcData().apply {
-        addEntry(LrcEntry(0L, "No lyrics found for this song."))
-    }
 
     /**
      * App-wide coroutine scope. A [SupervisorJob] is used so that a failed lyrics
@@ -156,7 +153,7 @@ class LyricsManager @Inject constructor(
         }
 
         // If the path is null we can't do anything meaningful — bail here so doLoad
-        // never receives a null path and we don't need the non-null assertion below.
+        // never receives a null path, and we don't need the non-null assertion below.
 
         // Bake any unsaved sync adjustment for the outgoing song before resetting state.
         persistSyncAdjustment()
@@ -173,6 +170,9 @@ class LyricsManager @Inject constructor(
         _syncOffsetMs.value = 0L
         bakedLrcData = null
         syncSaveHandler.removeCallbacks(syncSaveRunnable)
+
+        // Drop any error left over from the previous song's online lookup.
+        _loadingStatus.value = LyricsLoadingStatus.Idle
 
         // No song is playing at all — mark empty and stop here.
         if (currentSong == null) {
@@ -239,6 +239,7 @@ class LyricsManager @Inject constructor(
             fetchAndSaveLrc(
                     trackName = song.title ?: song.name,
                     artistName = song.artist ?: "",
+                    durationMs = song.duration,
                     audioPath = song.uri,
                     songPath = songPath
             )
@@ -269,7 +270,7 @@ class LyricsManager @Inject constructor(
 
     /**
      * Emits [data] into [_lrcData] only if [songPath] still matches [lastLoadedPath].
-     * Stale results from cancelled-but-not-yet-dead coroutines are quietly dropped here.
+     * Stale results from canceled-but-not-yet-dead coroutines are quietly dropped here.
      */
     private fun emitIfStillRelevant(songPath: String?, data: LrcData) {
         if (isStillRelevant(songPath)) {
@@ -319,6 +320,7 @@ class LyricsManager @Inject constructor(
     private suspend fun fetchAndSaveLrc(
             trackName: String,
             artistName: String,
+            durationMs: Long,
             audioPath: String,
             songPath: String
     ) {
@@ -331,13 +333,33 @@ class LyricsManager @Inject constructor(
             return
         }
 
+        var failure: Throwable? = null
+
         result.onSuccess { results ->
-            val syncedLyrics = results.firstOrNull()?.syncedLyrics
+            val durationSec = durationMs / 1000.0
+            val wiggleZone = 5.0
+
+            val matchedResult = results
+                .filter {
+                    !it.syncedLyrics.isNullOrBlank()
+                }
+                .firstOrNull {
+                    abs(it.duration - durationSec) <= wiggleZone
+                }
+
+            val syncedLyrics = matchedResult?.syncedLyrics
+
             if (!syncedLyrics.isNullOrBlank()) {
                 _loadingStatus.value = LyricsLoadingStatus.Downloading(trackName)
                 try {
-                    val parsed = withContext(Dispatchers.Default) { LrcParser().parse(syncedLyrics) }
-                    withContext(Dispatchers.IO) { lrcRepository.saveLrcToFile(syncedLyrics, audioPath) }
+                    val parsed = withContext(Dispatchers.Default) {
+                        LrcParser().parse(syncedLyrics)
+                    }
+
+                    withContext(Dispatchers.IO) {
+                        lrcRepository.saveLrcToFile(syncedLyrics, audioPath)
+                    }
+
                     Log.d(TAG, "Downloaded and saved lyrics for '$trackName'.")
                     emitIfStillRelevant(songPath, parsed)
                 } catch (e: LyricsParseException) {
@@ -350,10 +372,13 @@ class LyricsManager @Inject constructor(
             }
         }.onFailure { exception ->
             exception.printStackTrace()
+            failure = exception
             emitIfStillRelevant(songPath, LrcData())
         }
 
-        _loadingStatus.value = LyricsLoadingStatus.Idle
+        _loadingStatus.value = failure?.let {
+            LyricsLoadingStatus.Failed(it.toLyricsErrorCode())
+        } ?: LyricsLoadingStatus.Idle
     }
 
     /**
@@ -459,4 +484,10 @@ sealed class LyricsLoadingStatus {
      * @param trackName the song whose lyrics are being saved.
      */
     data class Downloading(val trackName: String) : LyricsLoadingStatus()
+
+    /**
+     * The online lookup failed (no internet, server error, bad response…).
+     * @param errorCode short code such as `HTTP 503` or `NO_INTERNET` that can be shown to the user.
+     */
+    data class Failed(val errorCode: String) : LyricsLoadingStatus()
 }

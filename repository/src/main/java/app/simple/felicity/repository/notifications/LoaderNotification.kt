@@ -7,7 +7,6 @@ import android.content.Context
 import android.os.SystemClock
 import androidx.core.app.NotificationCompat
 import app.simple.felicity.repository.R
-import app.simple.felicity.repository.notifications.LoaderNotification.Companion.NOTIFICATION_UPDATE_INTERVAL
 
 /**
  * Manages the "Scanning Library" notification that pops up while Felicity
@@ -29,19 +28,17 @@ class LoaderNotification(private val context: Context) {
 
     companion object {
         private const val SCAN_CHANNEL_ID = "felicity_library_scanner"
-        private const val SCAN_NOTIFICATION_ID = 1001
 
         /**
-         * How often (in files evaluated) the notification text is refreshed.
-         * Updating on every single file would hammer the notification system,
-         * so we settle for a nice round number that still feels responsive.
+         * Do not use 1001 because it is used as the default notification ID in the AndroidX Media3 library.
+         * See [DefaultMediaNotificationProvider (L229)](https://github.com/androidx/media/blob/8c6678b657ede1e7883fc164ef73ed483c7796c3/libraries/session/src/main/java/androidx/media3/session/DefaultMediaNotificationProvider.java#L229).
          */
-        const val NOTIFICATION_UPDATE_INTERVAL = 25
+        private const val SCAN_NOTIFICATION_ID = 1002
 
         /**
          * Minimum wall-clock time between two actual notify() calls, in
-         * milliseconds. Even with [NOTIFICATION_UPDATE_INTERVAL] the updates
-         * can come thick and fast on big libraries, and every notify() call
+         * milliseconds. Progress updates can come thick and fast on big libraries,
+         * and every notify() call
          * makes the notification shade re-rank and re-animate — which is also
          * what keeps interrupting other apps' notifications.
          */
@@ -85,7 +82,43 @@ class LoaderNotification(private val context: Context) {
      */
     private var totalFiles = 0
 
+    /** Number of files processed so far in the [Phase.READING] phase. */
+    private var scannedFiles = 0
+
+    /** Number of audio files discovered so far, shown during [Phase.DISCOVERING]. */
+    private var foundFiles = 0
+
+    private var phase = Phase.PREPARING
+
     private var lastUpdateElapsedMs = 0L
+
+    /**
+     * The distinct stages of a library scan, in the order they normally happen.
+     * Each one gets its own message so the notification visibly moves along
+     * instead of sitting on a single line until the very end.
+     */
+    enum class Phase {
+        /** Getting things ready before any real work starts. */
+        PREPARING,
+
+        /** Removing songs that no longer exist or lost access. */
+        CLEANING,
+
+        /** Loading what is already in the library, so only new or changed files get read. */
+        CHECKING,
+
+        /** Walking the music folders looking for audio files. */
+        DISCOVERING,
+
+        /** Reading tags and metadata from new or changed files, with a real progress bar. */
+        READING,
+
+        /** Writing the remaining results to the library. */
+        SAVING,
+
+        /** Last bits of housekeeping, like resolving file paths. */
+        FINISHING
+    }
 
     /**
      * Call this right before a scan begins. It sets up the notification channel
@@ -95,83 +128,99 @@ class LoaderNotification(private val context: Context) {
      *
      * @return A generation token for this scan — hold onto it!
      */
-    fun begin(): Int {
+    fun begin(context: Context): Int {
         setupChannel()
         return synchronized(lock) {
             totalFiles = 0
-            lastUpdateElapsedMs = 0L
+            scannedFiles = 0
+            foundFiles = 0
+            phase = Phase.PREPARING
+            lastUpdateElapsedMs = SystemClock.elapsedRealtime()
             generation += 1
             active = true
             val token = generation
-            notificationManager.notify(SCAN_NOTIFICATION_ID, buildIndeterminate())
+            notificationManager.notify(SCAN_NOTIFICATION_ID, build())
             token
         }
     }
 
     /**
-     * Once you know how many audio files live on the device, call this to give
-     * the notification a finishing line to aim for. Before this is called the
-     * bar stays as an indeterminate spinner. After this, it fills up as files
-     * are scanned — much more satisfying to watch.
+     * Moves the notification to a new [Phase] and posts it immediately. Phase
+     * changes are never rate-limited since there are only a handful per scan.
      *
      * @param generation The token returned by [begin] for the current scan.
-     * @param total The total number of audio files found across all storage volumes.
+     * @param phase The stage the scan has just entered.
+     */
+    fun setPhase(generation: Int, phase: Phase) {
+        synchronized(lock) {
+            if (!active || generation != this.generation) return
+            this.phase = phase
+            postLocked()
+        }
+    }
+
+    /**
+     * Sets how many files will actually need to be read in [Phase.READING] — that is,
+     * the new or modified ones, not the whole library. This is the finish line of the
+     * progress bar.
+     *
+     * @param generation The token returned by [begin] for the current scan.
+     * @param total Number of files that will be processed.
      */
     fun setTotal(generation: Int, total: Int) {
         synchronized(lock) {
             if (generation == this.generation) {
                 totalFiles = total
+                scannedFiles = 0
             }
         }
     }
 
     /**
-     * Refreshes the notification to show the latest scan progress. If we know
-     * the total file count (from [setTotal]), this shows a proper fill-level bar.
-     * Otherwise, it keeps the indeterminate spinner going.
+     * Reports how many audio files have been discovered so far while the folders
+     * are being walked. Rate-limited like [updateProgress].
+     */
+    fun updateFound(generation: Int, found: Int) {
+        synchronized(lock) {
+            if (!active || generation != this.generation) return
+            foundFiles = found
+            if (phase != Phase.DISCOVERING) return
+            postRateLimitedLocked(force = false)
+        }
+    }
+
+    /**
+     * Refreshes the notification to show the latest read progress against the
+     * total set by [setTotal].
      *
      * Updates are rate-limited in time so big libraries don't turn into a
      * notification storm that constantly re-ranks the shade.
      *
      * @param generation The token returned by [begin] for the current scan.
-     * @param scanned How many files have been evaluated (checked) so far.
+     * @param scanned How many files have been processed so far.
      * @param force Skip the time-based rate limit (used for the final "done" update).
      */
     fun updateProgress(generation: Int, scanned: Int, force: Boolean = false) {
-        val now = SystemClock.elapsedRealtime()
-
         synchronized(lock) {
             // Both checks live inside the lock so a canceled scan's straggler
             // producer can never resurrect the notification after the scan's
-            // final cancel — the "notification never goes away" bug.
+            // final cancel.
             if (!active || generation != this.generation) return
-            if (!force && now - lastUpdateElapsedMs < MIN_UPDATE_INTERVAL_MS) return
-
-            lastUpdateElapsedMs = now
-
-            val total = totalFiles
-            val isIndeterminate = total <= 0
-
-            val contentText = if (isIndeterminate) {
-                "Scanning your music library…"
-            } else {
-                "$scanned of $total files scanned"
-            }
-
-            val notification = NotificationCompat.Builder(context, SCAN_CHANNEL_ID)
-                .setSmallIcon(R.drawable.ic_felicity_full)
-                .setContentTitle("Scanning Library")
-                .setContentText(contentText)
-                .setProgress(total, scanned.coerceAtMost(total), isIndeterminate)
-                .setSilent(true)
-                .setOngoing(true)
-                .setOnlyAlertOnce(true)
-                .setShowWhen(false)
-                .setPriority(NotificationCompat.PRIORITY_LOW)
-                .build()
-
-            notificationManager.notify(SCAN_NOTIFICATION_ID, notification)
+            scannedFiles = scanned
+            if (phase != Phase.READING) return
+            postRateLimitedLocked(force)
         }
+    }
+
+    private fun postRateLimitedLocked(force: Boolean) {
+        val now = SystemClock.elapsedRealtime()
+        if (!force && now - lastUpdateElapsedMs < MIN_UPDATE_INTERVAL_MS) return
+        postLocked()
+    }
+
+    private fun postLocked() {
+        lastUpdateElapsedMs = SystemClock.elapsedRealtime()
+        notificationManager.notify(SCAN_NOTIFICATION_ID, build())
     }
 
     /**
@@ -181,13 +230,21 @@ class LoaderNotification(private val context: Context) {
      * safely in place.
      *
      * @param generation The token returned by [begin] when this scan started.
+     * @return true if [generation] was still current (i.e. this call actually owned
+     *         and dismissed the notification), false if a newer scan had already
+     *         superseded it and this call was a safe no-op. Callers can use this to
+     *         know whether it is safe to also reset any other scan-ownership state —
+     *         a superseded scan must never tear down state belonging to the scan
+     *         that replaced it.
      */
-    fun dismiss(generation: Int) {
+    fun dismiss(generation: Int): Boolean {
         synchronized(lock) {
             if (generation == this.generation) {
                 active = false
                 notificationManager.cancel(SCAN_NOTIFICATION_ID)
+                return true
             }
+            return false
         }
     }
 
@@ -238,12 +295,51 @@ class LoaderNotification(private val context: Context) {
         notificationManager.createNotificationChannel(channel)
     }
 
-    private fun buildIndeterminate(): Notification {
+    private fun build(): Notification {
+        val determinate = phase == Phase.READING && totalFiles > 0
+
+        val text = when (phase) {
+            Phase.PREPARING -> {
+                context.getString(R.string.getting_music_ready)
+            }
+            Phase.CLEANING -> {
+                context.getString(R.string.scan_state_cleaning)
+            }
+            Phase.CHECKING -> {
+                context.getString(R.string.scan_state_checking)
+            }
+            Phase.DISCOVERING -> {
+                if (foundFiles > 0) {
+                    context.getString(R.string.scan_state_discovering_count, foundFiles)
+                } else {
+                    context.getString(R.string.scan_state_discovering)
+                }
+            }
+            Phase.READING -> {
+                if (totalFiles > 0) {
+                    context.getString(
+                            R.string.scan_state_reading,
+                            scannedFiles.coerceAtMost(totalFiles), totalFiles)
+                } else {
+                    context.getString(R.string.scan_state_reading_indeterminate)
+                }
+            }
+            Phase.SAVING -> {
+                context.getString(R.string.scan_state_saving)
+            }
+            Phase.FINISHING -> {
+                context.getString(R.string.scan_state_finishing)
+            }
+        }
+
         return NotificationCompat.Builder(context, SCAN_CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_felicity_full)
-            .setContentTitle("Scanning Library")
-            .setContentText("Getting your music ready…")
-            .setProgress(0, 0, true)
+            .setContentTitle(context.getString(R.string.scanning_library))
+            .setContentText(text)
+            .setProgress(
+                    /* max = */ if (determinate) totalFiles else 0,
+                    /* progress = */ if (determinate) scannedFiles.coerceAtMost(totalFiles) else 0,
+                    /* indeterminate = */ !determinate)
             .setSilent(true)
             .setOngoing(true)
             .setOnlyAlertOnce(true)

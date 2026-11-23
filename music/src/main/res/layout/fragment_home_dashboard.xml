@@ -129,6 +129,23 @@
                         app:highlightMode="outline"
                         app:textColorStyle="secondary" />
 
+                    <app.simple.felicity.decorations.highlight.HighlightTextView
+                        android:id="@+id/sleep_timer"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:gravity="center_vertical"
+                        android:paddingVertical="@dimen/padding_5"
+                        android:paddingHorizontal="@dimen/padding_10"
+                        android:layout_marginStart="@dimen/padding_8"
+                        android:drawableStart="@drawable/ic_timer_16dp"
+                        android:drawablePadding="@dimen/padding_5"
+                        android:textSize="@dimen/text_size_14"
+                        android:visibility="gone"
+                        app:appFontStyle="bold"
+                        app:drawableTintStyle="accent"
+                        app:highlightMode="outline"
+                        app:textColorStyle="secondary" />
+
                     <!-- Server active chip: only visible while the Wi-Fi server is running -->
                     <app.simple.felicity.decorations.highlight.HighlightTextView
                         android:id="@+id/server_active_chip"
@@ -145,6 +162,25 @@
                         android:textSize="@dimen/text_size_14"
                         android:singleLine="true"
                         android:visibility="gone"
+                        app:appFontStyle="bold"
+                        app:drawableTintStyle="accent"
+                        app:highlightMode="outline"
+                        app:textColorStyle="secondary" />
+
+                    <app.simple.felicity.decorations.highlight.HighlightTextView
+                        android:id="@+id/weather"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="@dimen/padding_8"
+                        android:gravity="center_vertical"
+                        android:paddingVertical="@dimen/padding_5"
+                        android:paddingHorizontal="@dimen/padding_10"
+                        android:drawableStart="@drawable/ic_cloud_16dp"
+                        android:drawablePadding="@dimen/padding_5"
+                        android:text="@string/weather_effect"
+                        android:layout_marginEnd="@dimen/padding_15"
+                        android:textSize="@dimen/text_size_14"
+                        android:singleLine="true"
                         app:appFontStyle="bold"
                         app:drawableTintStyle="accent"
                         app:highlightMode="outline"
@@ -173,8 +209,9 @@
                 android:nestedScrollingEnabled="false"
                 android:overScrollMode="never" />
 
+
             <LinearLayout
-                android:id="@+id/recommended_section"
+                android:id="@+id/mixed_section"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:orientation="vertical"
@@ -193,13 +230,13 @@
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
                         android:layout_gravity="center_vertical"
-                        android:text="@string/recommended"
+                        android:text="@string/mixes"
                         android:textSize="@dimen/text_size_22"
                         app:appFontStyle="bold"
                         app:textColorStyle="primary" />
 
                     <app.simple.felicity.decorations.ripple.DynamicRippleImageButton
-                        android:id="@+id/refresh_recommended"
+                        android:id="@+id/refresh_mixes"
                         android:layout_width="@dimen/button_size"
                         android:layout_height="@dimen/button_size"
                         android:layout_gravity="center_vertical"
@@ -207,15 +244,14 @@
 
                 </LinearLayout>
 
-                <app.simple.felicity.decorations.views.CornerRadiusRectRecyclerView
-                    android:id="@+id/recommended_grid"
-                    android:layout_width="match_parent"
+                <app.simple.felicity.decorations.overscroll.CustomHorizontalRecyclerView
+                    android:id="@+id/mixed_list"
+                    android:clipToPadding="false"
                     android:layout_height="wrap_content"
-                    android:layoutAnimation="@anim/spanned_animation_controller"
-                    android:nestedScrollingEnabled="false"
-                    android:overScrollMode="never"
-                    android:layout_marginHorizontal="@dimen/padding_20"
-                    android:clipToPadding="false" />
+                    android:layout_width="match_parent"
+                    android:paddingHorizontal="@dimen/padding_20"
+                    app:navigationPaddingRequired="false"
+                    app:statusPaddingRequired="false" />
 
             </LinearLayout>
 

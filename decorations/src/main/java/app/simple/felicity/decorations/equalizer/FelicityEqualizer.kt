@@ -1,5 +1,7 @@
-package app.simple.felicity.decorations.seekbars
+package app.simple.felicity.decorations.equalizer
 
+import android.animation.Animator
+import android.animation.AnimatorListenerAdapter
 import android.animation.ValueAnimator
 import android.content.Context
 import android.content.SharedPreferences
@@ -10,6 +12,7 @@ import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.RectF
 import android.graphics.Shader
+import android.graphics.drawable.Drawable
 import android.os.VibrationEffect
 import android.util.AttributeSet
 import android.view.MotionEvent
@@ -19,17 +22,18 @@ import android.view.ViewConfiguration
 import android.view.animation.DecelerateInterpolator
 import androidx.annotation.ColorInt
 import androidx.core.content.ContextCompat
+import androidx.core.graphics.withRotation
 import androidx.dynamicanimation.animation.FlingAnimation
 import androidx.dynamicanimation.animation.FloatPropertyCompat
 import androidx.dynamicanimation.animation.SpringAnimation
 import androidx.dynamicanimation.animation.SpringForce
+import app.simple.felicity.decoration.R
 import app.simple.felicity.decorations.drawables.ThumbPillDrawable
+import app.simple.felicity.decorations.equalizer.FelicityEqualizer.Companion.NO_ACTIVE_BAND
+import app.simple.felicity.decorations.equalizer.FelicityEqualizer.Companion.PEQ_DELETE_BTN_RADIUS_DP
+import app.simple.felicity.decorations.equalizer.FelicityEqualizer.Companion.PEQ_KNOB_DIAMETER_DP
 import app.simple.felicity.decorations.knobs.SimpleBaseKnobDrawable
 import app.simple.felicity.decorations.ripple.FelicityRippleDrawable
-import app.simple.felicity.decorations.seekbars.FelicityEqualizerSliders.Companion.NO_ACTIVE_BAND
-import app.simple.felicity.decorations.seekbars.FelicityEqualizerSliders.Companion.PEQ_DELETE_BTN_RADIUS_DP
-import app.simple.felicity.decorations.seekbars.FelicityEqualizerSliders.Companion.PEQ_KNOB_DIAMETER_DP
-import app.simple.felicity.decorations.seekbars.FelicityEqualizerSliders.Companion.PREAMP_BAND_INDEX
 import app.simple.felicity.decorations.typeface.TypeFace
 import app.simple.felicity.decorations.utils.VibrateUtils.vibrateEffect
 import app.simple.felicity.manager.SharedPreferences.registerSharedPreferenceChangeListener
@@ -45,7 +49,7 @@ import kotlin.math.cos
 import kotlin.math.exp
 import kotlin.math.ln
 import kotlin.math.sin
-import app.simple.felicity.decoration.R as DecoR
+import kotlin.math.sqrt
 
 /**
  * A 10-band graphic equalizer slider view plus a dedicated pre-amplifier slider,
@@ -64,7 +68,7 @@ import app.simple.felicity.decoration.R as DecoR
  *
  * @author Hamza417
  */
-class FelicityEqualizerSliders @JvmOverloads constructor(
+class FelicityEqualizer @JvmOverloads constructor(
         context: Context,
         attrs: AttributeSet? = null,
         defStyleAttr: Int = 0
@@ -98,8 +102,18 @@ class FelicityEqualizerSliders @JvmOverloads constructor(
         fun onPeqBandsChanged(bands: List<PeqBand>)
     }
 
+    fun interface OnBandLongClickListener {
+        fun onBandLongClick(bandIndex: Int, currentGain: Float)
+    }
+
+    fun interface OnPeqBandEditClickListener {
+        fun onPeqBandEditClick(bandIndex: Int, band: PeqBand)
+    }
+
     private var bandChangedListener: OnBandChangedListener? = null
     private var peqBandChangedListener: OnPeqBandChangedListener? = null
+    private var bandLongClickListener: OnBandLongClickListener? = null
+    private var peqBandEditClickListener: OnPeqBandEditClickListener? = null
 
     fun setOnBandChangedListener(listener: OnBandChangedListener?) {
         bandChangedListener = listener
@@ -108,6 +122,16 @@ class FelicityEqualizerSliders @JvmOverloads constructor(
     fun setOnPeqBandChangedListener(listener: OnPeqBandChangedListener?) {
         peqBandChangedListener = listener
     }
+
+    fun setOnBandLongClickListener(listener: OnBandLongClickListener?) {
+        bandLongClickListener = listener
+    }
+
+    fun setOnPeqBandEditClickListener(listener: OnPeqBandEditClickListener?) {
+        peqBandEditClickListener = listener
+    }
+
+
 
     // -------------------------------------------------------------------------
     // Constants
@@ -141,7 +165,7 @@ class FelicityEqualizerSliders @JvmOverloads constructor(
 
         private const val OVERSCROLL_DECAY_FACTOR = 400f
         private const val MAX_OVERSCROLL_DP = 128f
-        private const val TAG = "FelicityEqualizerSliders"
+        private const val TAG = "FelicityEqualizer"
 
         /** The total angular sweep of a knob in degrees (from min to max). */
         private const val KNOB_SWEEP_DEG = 270f
@@ -156,7 +180,7 @@ class FelicityEqualizerSliders @JvmOverloads constructor(
         private const val PEQ_KNOB_DIAMETER_DP = 112f
 
         /** Horizontal inset on both sides of each section, in dp. */
-        private const val PEQ_SECTION_H_PADDING_DP = 32F
+        private const val PEQ_SECTION_H_PADDING_DP = 16F
 
         /** Radius of the delete button circle drawn at the top-right corner of each section. */
         private const val PEQ_DELETE_BTN_RADIUS_DP = 12f
@@ -168,14 +192,7 @@ class FelicityEqualizerSliders @JvmOverloads constructor(
          * Gap in dp between the outer edge of a knob's arc and the nearest label (pill above
          * and value text below). Increase this to prevent text from touching the arc.
          */
-        private const val PEQ_KNOB_LABEL_GAP_DP = 12f
-
-        /**
-         * Extra vertical breathing room inserted between the Q knob's value label and the
-         * FREQ knob's type pill. Without this the two knobs press against each other when
-         * the track height is tight.
-         */
-        private const val PEQ_KNOB_INTER_GAP_DP = 14f
+        private const val PEQ_KNOB_LABEL_GAP_DP = 6f
 
         /** Stroke width of the arc track and progress arc around each knob, in dp. */
         private const val PEQ_ARC_STROKE_DP = 1.5f
@@ -211,7 +228,9 @@ class FelicityEqualizerSliders @JvmOverloads constructor(
         data class PeqBand(
                 var gain: Float = 0f,
                 var q: Float = 1.0f,
-                var frequencyHz: Float = 1000f
+                var frequencyHz: Float = 1000f,
+                @ColorInt var color: Int = 0,
+                var type: Int = 0
         )
 
         /** The available display modes for this equalizer widget. */
@@ -315,7 +334,7 @@ class FelicityEqualizerSliders @JvmOverloads constructor(
         SimpleBaseKnobDrawable().also { it.callback = this }
 
     /** Which element in a PEQ section is currently being dragged. */
-    private enum class PeqTarget { NONE, GAIN_SLIDER, Q_KNOB, FREQ_KNOB, ADD_BUTTON, DELETE_BUTTON }
+    private enum class PeqTarget { NONE, GAIN_SLIDER, Q_KNOB, FREQ_KNOB, ADD_BUTTON, DELETE_BUTTON, EDIT_BUTTON }
 
     private var peqTouchTarget = PeqTarget.NONE
     private var peqTouchBandIndex = -1
@@ -372,9 +391,9 @@ class FelicityEqualizerSliders @JvmOverloads constructor(
 
     private val maxOverscrollPx get() = MAX_OVERSCROLL_DP * resources.displayMetrics.density
 
-    private val scrollOffsetProperty = object : FloatPropertyCompat<FelicityEqualizerSliders>("scrollOffset") {
-        override fun getValue(view: FelicityEqualizerSliders): Float = view.scrollOffset
-        override fun setValue(view: FelicityEqualizerSliders, value: Float) {
+    private val scrollOffsetProperty = object : FloatPropertyCompat<FelicityEqualizer>("scrollOffset") {
+        override fun getValue(view: FelicityEqualizer): Float = view.scrollOffset
+        override fun setValue(view: FelicityEqualizer, value: Float) {
             view.scrollOffset = value.coerceIn(-maxOverscrollPx, maxScroll + maxOverscrollPx)
             view.invalidate()
         }
@@ -389,7 +408,9 @@ class FelicityEqualizerSliders @JvmOverloads constructor(
 
     private val scrollFling = FlingAnimation(this, scrollOffsetProperty).apply {
         friction = 1.1f
-        addEndListener { _, _, _, _ -> snapScrollToBounds() }
+        addEndListener { _, _, _, velocity ->
+            snapScrollToBounds(velocity)
+        }
     }
 
     private var velocityTracker: VelocityTracker? = null
@@ -406,6 +427,20 @@ class FelicityEqualizerSliders @JvmOverloads constructor(
     private var touchStartY = 0f
     private var scrollOffsetAtDown = 0f
     private var thumbYAtDown = 0f
+    private var isLongPressTriggered = false
+
+    private val longPressRunnable = Runnable {
+        if (!isScrollGesture && !isBandGesture) {
+            isLongPressTriggered = true
+            context.vibrateEffect(VibrationEffect.EFFECT_HEAVY_CLICK, TAG)
+            if (mode == Mode.GRAPHIC && activeBandIndex != NO_ACTIVE_BAND) {
+                val gain = if (activeBandIndex == PREAMP_BAND_INDEX) preampDisplayGain else displayGains[activeBandIndex]
+                bandLongClickListener?.onBandLongClick(activeBandIndex, gain)
+            } else if (mode == Mode.PARAMETRIC && peqTouchTarget == PeqTarget.GAIN_SLIDER && peqTouchBandIndex >= 0) {
+                bandLongClickListener?.onBandLongClick(peqTouchBandIndex, peqBands[peqTouchBandIndex].gain)
+            }
+        }
+    }
 
     // -------------------------------------------------------------------------
     // Press-scale animations per band (EQ bands 0–9 + preamp)
@@ -540,9 +575,9 @@ class FelicityEqualizerSliders @JvmOverloads constructor(
     /** Unified pill-thumb drawable shared across all columns (including the preamp). */
     private val thumbPillDrawable = ThumbPillDrawable(ThumbPillDrawable.Orientation.VERTICAL).apply {
         ringStrokePx = thumbRingStrokePx
-        gripLineStrokePx = this@FelicityEqualizerSliders.gripLineStrokePx
-        gripLineHalfLengthFraction = this@FelicityEqualizerSliders.gripLineHalfLengthFraction
-        gripLineSpacingFraction = this@FelicityEqualizerSliders.gripLineSpacingFraction
+        gripLineStrokePx = this@FelicityEqualizer.gripLineStrokePx
+        gripLineHalfLengthFraction = this@FelicityEqualizer.gripLineHalfLengthFraction
+        gripLineSpacingFraction = this@FelicityEqualizer.gripLineSpacingFraction
     }
 
     private val trackProgressPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -653,7 +688,17 @@ class FelicityEqualizerSliders @JvmOverloads constructor(
      * against the translucent button background. Loaded once and reused each frame.
      */
     private val deleteIconDrawable = if (!isInEditMode) {
-        ContextCompat.getDrawable(context, DecoR.drawable.ic_delete)?.mutate()?.also {
+        ContextCompat.getDrawable(context, R.drawable.ic_delete)?.mutate()?.also {
+            it.setTint(ThemeManager.theme.iconTheme.secondaryIconColor)
+        }
+    } else null
+
+    private val editBtnBgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL
+    }
+
+    private val editIconDrawable = if (!isInEditMode) {
+        ContextCompat.getDrawable(context, R.drawable.ic_edit_16dp)?.mutate()?.also {
             it.setTint(ThemeManager.theme.iconTheme.secondaryIconColor)
         }
     } else null
@@ -752,6 +797,7 @@ class FelicityEqualizerSliders @JvmOverloads constructor(
         deleteBtnXPaint.color = Color.argb(200, 25, 25, 25)
         deleteBtnXPaint.strokeWidth = 1.8f * d
         deleteBtnBgPaint.color = Color.argb(60, 220, 60, 60)
+        editBtnBgPaint.color = Color.argb(30, Color.red(accentColor), Color.green(accentColor), Color.blue(accentColor))
 
         // Re-apply shadow layers so the glow color tracks accent/theme changes.
         applyShadowLayers()
@@ -762,7 +808,7 @@ class FelicityEqualizerSliders @JvmOverloads constructor(
         addBandRipple = FelicityRippleDrawable(accentColor).apply {
             setStartColor(trackColor)
             setCornerRadius(10f * d)
-            callback = this@FelicityEqualizerSliders
+            callback = this@FelicityEqualizer
         }
     }
 
@@ -823,9 +869,9 @@ class FelicityEqualizerSliders @JvmOverloads constructor(
      * Tells the View that every PEQ knob drawable belongs to this view, so when a
      * drawable calls [android.graphics.drawable.Drawable.invalidateSelf] — for example
      * during a press-color animation — the invalidation actually reaches [onDraw].
-     * Without this, the base [View.invalidateDrawable] silently discards the call.
+     * Without this, the base [invalidateDrawable] silently discards the call.
      */
-    override fun verifyDrawable(who: android.graphics.drawable.Drawable): Boolean {
+    override fun verifyDrawable(who: Drawable): Boolean {
         if (peqQKnobDrawables.any { it === who }) return true
         if (peqFreqKnobDrawables.any { it === who }) return true
         if (who === addBandRipple) return true
@@ -967,6 +1013,18 @@ class FelicityEqualizerSliders @JvmOverloads constructor(
 
     /** Replaces the PEQ band list with the given bands and refreshes the layout. */
     fun setPeqBands(bands: List<PeqBand>) {
+        if (bands.size == peqBands.size) {
+            for (i in bands.indices) {
+                peqBands[i].gain = bands[i].gain
+                peqBands[i].q = bands[i].q
+                peqBands[i].frequencyHz = bands[i].frequencyHz
+                peqBands[i].color = bands[i].color
+                peqBands[i].type = bands[i].type
+            }
+            invalidate()
+            return
+        }
+
         detachAllPeqDrawables()
         peqBands.clear()
         peqBands.addAll(bands)
@@ -1010,8 +1068,8 @@ class FelicityEqualizerSliders @JvmOverloads constructor(
                 newBandAnimAlpha = (255 * t).toInt()
                 invalidate()
             }
-            addListener(object : android.animation.AnimatorListenerAdapter() {
-                override fun onAnimationEnd(animation: android.animation.Animator) {
+            addListener(object : AnimatorListenerAdapter() {
+                override fun onAnimationEnd(animation: Animator) {
                     newBandAnimIndex = -1
                     newBandAnimScale = 1f
                     newBandAnimAlpha = 255
@@ -1059,18 +1117,30 @@ class FelicityEqualizerSliders @JvmOverloads constructor(
     private fun computeKnobCenters(sliderCx: Float): KnobCenters {
         val arcR = peqKnobArcRadiusPx
         val innerGap = PEQ_SLIDER_KNOB_GAP_DP * d
-        val trackMid = trackTop + trackLength * 0.5f
+        val bgTop = trackTop - sliderVerticalPaddingPx * 0.5f
+        val bgBottom = (height - paddingBottom).toFloat()
+
+        val labelGap = PEQ_KNOB_LABEL_GAP_DP * d
+        val pillH = knobTypeLabelTextPaint.fontSpacing * 0.9f + 4f * d
+        val singleKnobH = pillH + labelGap + 2f * arcR + labelGap + knobLabelPaint.fontSpacing
+
         return if (isLandscape) {
             val qKnobCx = sliderCx + thumbHalfWidthPx + innerGap + arcR
             val freqKnobCx = qKnobCx + 2f * arcR + PEQ_KNOB_KNOB_GAP_DP * d
-            KnobCenters(qKnobCx, trackMid, freqKnobCx, trackMid)
+
+            // Center the entire knob block (including labels) vertically on the background.
+            val bgMid = (bgTop + bgBottom) * 0.5f
+            val cy = bgMid + (pillH + labelGap + arcR) - singleKnobH * 0.5f
+            KnobCenters(qKnobCx, cy, freqKnobCx, cy)
         } else {
             val knobCx = sliderCx + thumbHalfWidthPx + innerGap + arcR
-            val labelGap = PEQ_KNOB_LABEL_GAP_DP * d
-            val pillH = knobTypeLabelTextPaint.fontSpacing * 0.9f + 4f * d
-            val knobTotalHeight = pillH + labelGap + 2f * arcR + labelGap + knobLabelPaint.fontSpacing + PEQ_KNOB_INTER_GAP_DP * d
-            val qKnobCy = trackMid - knobTotalHeight * 0.5f - arcR - labelGap - pillH * 0.5f + knobTotalHeight * 0.5f
-            val freqKnobCy = qKnobCy + knobTotalHeight
+
+            val remainingSpace = (bgBottom - bgTop) - 2f * singleKnobH
+            val gap = (remainingSpace / 3f).coerceAtLeast(0f)
+
+            val qKnobCy = bgTop + gap + pillH + labelGap + arcR
+            val freqKnobCy = bgTop + gap + singleKnobH + gap + pillH + labelGap + arcR
+
             KnobCenters(knobCx, qKnobCy, knobCx, freqKnobCy)
         }
     }
@@ -1180,7 +1250,7 @@ class FelicityEqualizerSliders @JvmOverloads constructor(
         val zeroY = gainToThumbY(0f)
         for (i in 0 until BAND_COUNT) {
             val cx = bandCenterX(i)
-            if (cx < visibleLeft || cx > visibleRight) continue
+            if (cx !in visibleLeft..visibleRight) continue
             drawColumnTrackAndThumb(canvas, cx, gainToThumbY(displayGains[i]), zeroY, pressScales[i])
         }
     }
@@ -1194,7 +1264,15 @@ class FelicityEqualizerSliders @JvmOverloads constructor(
      * @param zeroY     View-space Y corresponding to 0 dB reference.
      * @param scale     Current press-scale for the thumb.
      */
-    private fun drawColumnTrackAndThumb(canvas: Canvas, cx: Float, thumbY: Float, zeroY: Float, scale: Float) {
+    private fun drawColumnTrackAndThumb(canvas: Canvas, cx: Float, thumbY: Float, zeroY: Float, scale: Float, @ColorInt bandColor: Int = accentColor) {
+        val originalTrackColor = trackProgressPaint.color
+        val originalPressColor = pressRingPaint.color
+        val originalThumbColor = thumbPillDrawable.fillColor
+
+        trackProgressPaint.color = bandColor
+        pressRingPaint.color = bandColor
+        thumbPillDrawable.fillColor = bandColor
+
         canvas.drawLine(cx, trackTop, cx, trackBottom, trackPaint)
 
         val progressTop = minOf(zeroY, thumbY)
@@ -1225,6 +1303,10 @@ class FelicityEqualizerSliders @JvmOverloads constructor(
 
         thumbPillDrawable.setBoundsF(cx - halfW, thumbY - halfH, cx + halfW, thumbY + halfH)
         thumbPillDrawable.draw(canvas)
+
+        trackProgressPaint.color = originalTrackColor
+        pressRingPaint.color = originalPressColor
+        thumbPillDrawable.fillColor = originalThumbColor
     }
 
     /**
@@ -1403,18 +1485,25 @@ class FelicityEqualizerSliders @JvmOverloads constructor(
         val bgRight = cx + halfSection - 3f * d
         val bgTop = trackTop - sliderVerticalPaddingPx * 0.5f
         val bgBottom = (height - paddingBottom).toFloat()
+
+        val bandColor = if (band.color == 0) accentColor else band.color
+
+        val originalBgColor = peqSectionBgPaint.color
+        val bgAlpha = originalBgColor ushr 24
+        peqSectionBgPaint.color = (bgAlpha shl 24) or (bandColor and 0x00FFFFFF)
         canvas.drawRoundRect(bgLeft, bgTop, bgRight, bgBottom, 8f * d, 8f * d, peqSectionBgPaint)
+        peqSectionBgPaint.color = originalBgColor
 
         // Gain slider: left-inset by hPad, centered on the slider's own half-width.
-        val sliderCx = bgLeft + 3f * d + hPad + thumbHalfWidthPx
+        val sliderCx = cx - halfSection + hPad + thumbHalfWidthPx
         val zeroY = gainToThumbY(0f)
         val thumbY = gainToThumbY(band.gain.coerceIn(MIN_DB, MAX_DB))
         val gainPressScale = peqGainPressScales.getOrElse(bandIndex) { 1f }
-        drawColumnTrackAndThumb(canvas, sliderCx, thumbY, zeroY, gainPressScale)
+        drawColumnTrackAndThumb(canvas, sliderCx, thumbY, zeroY, gainPressScale, bandColor)
 
         val freqY = textRegionTop + freqTextPaint.fontSpacing * 0.85f
         val valueY = freqY + freqTextPaint.fontSpacing
-        valueTextPaint.color = if (abs(band.gain) < 0.05f) secondaryTextColor else accentColor
+        valueTextPaint.color = if (abs(band.gain) < 0.05f) secondaryTextColor else bandColor
         canvas.drawText(formatGain(band.gain), sliderCx, valueY, valueTextPaint)
         val savedFreqColor = freqTextPaint.color
         freqTextPaint.color = secondaryTextColor
@@ -1426,10 +1515,13 @@ class FelicityEqualizerSliders @JvmOverloads constructor(
         // computeKnobCenters handles both cases so this site stays orientation-agnostic.
         val knobCenters = computeKnobCenters(sliderCx)
 
-        drawPeqKnob(canvas, knobCenters.qCx, knobCenters.qCy, qToNormalized(band.q), "Q", formatQLabel(band.q),
-                    peqQKnobDrawables.getOrNull(bandIndex))
-        drawPeqKnob(canvas, knobCenters.freqCx, knobCenters.freqCy, freqToNormalized(band.frequencyHz), "FREQ", formatFreqLabel(band.frequencyHz),
-                    peqFreqKnobDrawables.getOrNull(bandIndex))
+        val qKnob = peqQKnobDrawables.getOrNull(bandIndex)
+        qKnob?.customAccentColor = bandColor
+        drawPeqKnob(canvas, knobCenters.qCx, knobCenters.qCy, qToNormalized(band.q), "Q", formatQLabel(band.q), qKnob, bandColor)
+
+        val freqKnob = peqFreqKnobDrawables.getOrNull(bandIndex)
+        freqKnob?.customAccentColor = bandColor
+        drawPeqKnob(canvas, knobCenters.freqCx, knobCenters.freqCy, freqToNormalized(band.frequencyHz), "FREQ", formatFreqLabel(band.frequencyHz), freqKnob, bandColor)
 
         // Delete button: small circle in the top-right corner of the section background.
         val delR = PEQ_DELETE_BTN_RADIUS_DP * d
@@ -1437,6 +1529,10 @@ class FelicityEqualizerSliders @JvmOverloads constructor(
         val delCx = bgRight - delR - delMargin
         val delCy = bgTop + delR + delMargin
         drawDeleteButton(canvas, delCx, delCy, delR)
+
+        val editCx = delCx - delR * 2.5f
+        val editCy = bgTop + delR + delMargin
+        drawEditButton(canvas, editCx, editCy, delR)
     }
 
     /**
@@ -1459,7 +1555,8 @@ class FelicityEqualizerSliders @JvmOverloads constructor(
             normalizedValue: Float,
             typeLabel: String,
             valueLabel: String,
-            drawable: SimpleBaseKnobDrawable? = null
+            drawable: SimpleBaseKnobDrawable? = null,
+            @ColorInt bandColor: Int = accentColor
     ) {
         val r = peqKnobRadiusPx
         val arcR = peqKnobArcRadiusPx
@@ -1471,7 +1568,10 @@ class FelicityEqualizerSliders @JvmOverloads constructor(
         // Filled progress arc sweeps from start to the current value.
         val sweepAngle = normalizedValue * KNOB_SWEEP_DEG
         if (sweepAngle > 0f) {
+            val originalArcColor = knobArcProgressPaint.color
+            knobArcProgressPaint.color = bandColor
             canvas.drawArc(knobArcRect, KNOB_ARC_START_DEG, sweepAngle, false, knobArcProgressPaint)
+            knobArcProgressPaint.color = originalArcColor
         }
 
         // Draw the knob body using the SimpleBaseKnobDrawable so the press-state color
@@ -1483,10 +1583,9 @@ class FelicityEqualizerSliders @JvmOverloads constructor(
         val rotationDeg = (normalizedValue - 0.5f) * KNOB_SWEEP_DEG
         if (drawable != null) {
             drawable.setBounds((cx - r).toInt(), (cy - r).toInt(), (cx + r).toInt(), (cy + r).toInt())
-            canvas.save()
-            canvas.rotate(rotationDeg, cx, cy)
-            drawable.draw(canvas)
-            canvas.restore()
+            canvas.withRotation(rotationDeg, cx, cy) {
+                drawable.draw(this)
+            }
         } else {
             // Fallback for the rare case the drawable list is out of sync.
             knobBodyPaint.color = trackColor
@@ -1509,12 +1608,22 @@ class FelicityEqualizerSliders @JvmOverloads constructor(
         val pillCy = cy - arcR - labelGap - pillH * 0.5f
         val pillLeft = cx - pillW * 0.5f
         val pillTop = pillCy - pillH * 0.5f
+
+        val originalBgColor = knobTypeLabelBgPaint.color
+        val originalTextColor = knobTypeLabelTextPaint.color
+        val bgAlpha = originalBgColor ushr 24
+        knobTypeLabelBgPaint.color = (bgAlpha shl 24) or (bandColor and 0x00FFFFFF)
+        knobTypeLabelTextPaint.color = bandColor
+
         canvas.drawRoundRect(pillLeft, pillTop, pillLeft + pillW, pillTop + pillH, pillH * 0.5f, pillH * 0.5f, knobTypeLabelBgPaint)
         canvas.drawText(typeLabel, cx, pillCy + knobTypeLabelTextPaint.fontSpacing * 0.35f, knobTypeLabelTextPaint)
 
+        knobTypeLabelBgPaint.color = originalBgColor
+        knobTypeLabelTextPaint.color = originalTextColor
+
         // Current value label below the arc.
         val labelY = cy + arcR + labelGap + knobLabelPaint.fontSpacing * 0.9f
-        canvas.drawText(valueLabel, cx, labelY.minus(42F), knobLabelPaint)
+        canvas.drawText(valueLabel, cx, labelY, knobLabelPaint)
     }
 
     /**
@@ -1552,16 +1661,29 @@ class FelicityEqualizerSliders @JvmOverloads constructor(
      * converted to pixels. The background gives the button clear visual padding so the icon
      * never sits flush against the section edge.
      */
+    private fun drawEditButton(canvas: Canvas, cx: Float, cy: Float, radius: Float) {
+        val icon = editIconDrawable
+        if (icon != null) {
+            val iconHalf = (radius * 0.62f).toInt()
+            icon.setBounds((cx - iconHalf).toInt(), (cy - iconHalf).toInt(),
+                           (cx + iconHalf).toInt(), (cy + iconHalf).toInt())
+            canvas.drawCircle(cx, cy, radius, editBtnBgPaint)
+            icon.draw(canvas)
+        }
+    }
+
     private fun drawDeleteButton(canvas: Canvas, cx: Float, cy: Float, radius: Float) {
         val icon = deleteIconDrawable
         if (icon != null) {
             val iconHalf = (radius * 0.62f).toInt()
             icon.setBounds((cx - iconHalf).toInt(), (cy - iconHalf).toInt(),
                            (cx + iconHalf).toInt(), (cy + iconHalf).toInt())
+            canvas.drawCircle(cx, cy, radius, deleteBtnBgPaint)
             icon.draw(canvas)
         } else {
             // Fallback: simple × in case the drawable couldn't be loaded.
             val arm = radius * 0.45f
+            canvas.drawCircle(cx, cy, radius, deleteBtnBgPaint)
             canvas.drawLine(cx - arm, cy - arm, cx + arm, cy + arm, deleteBtnXPaint)
             canvas.drawLine(cx + arm, cy - arm, cx - arm, cy + arm, deleteBtnXPaint)
         }
@@ -1648,7 +1770,7 @@ class FelicityEqualizerSliders @JvmOverloads constructor(
     private fun isTouchWithinContentBounds(x: Float): Boolean {
         val contentLeft = centeringOffset - scrollOffset
         val contentRight = contentLeft + contentWidth
-        return x >= contentLeft && x <= contentRight
+        return x in contentLeft..contentRight
     }
 
     override fun performClick(): Boolean {
@@ -1661,6 +1783,7 @@ class FelicityEqualizerSliders @JvmOverloads constructor(
         scrollOffsetAtDown = scrollOffset
         isScrollGesture = false
         isBandGesture = false
+        isLongPressTriggered = false
 
         if (scrollSpring.isRunning) scrollSpring.cancel()
         if (scrollFling.isRunning) scrollFling.cancel()
@@ -1676,6 +1799,7 @@ class FelicityEqualizerSliders @JvmOverloads constructor(
             )
             startBandPressAnimation(band, true)
             context.vibrateEffect(VibrationEffect.EFFECT_TICK, TAG)
+            postDelayed(longPressRunnable, ViewConfiguration.getLongPressTimeout().toLong())
         }
         activeBandIndex = band
         parent?.requestDisallowInterceptTouchEvent(true)
@@ -1686,10 +1810,13 @@ class FelicityEqualizerSliders @JvmOverloads constructor(
         val dx = event.x - touchStartX
         val dy = event.y - touchStartY
 
+        if (isLongPressTriggered) return
+
         if (!isScrollGesture && !isBandGesture) {
             val adx = abs(dx);
             val ady = abs(dy)
             if (adx > touchSlop || ady > touchSlop) {
+                removeCallbacks(longPressRunnable)
                 isBandGesture = activeBandIndex != NO_ACTIVE_BAND && ady > adx * 0.8f
                 isScrollGesture = !isBandGesture && adx > ady * 0.8f
                 if (isScrollGesture && activeBandIndex != NO_ACTIVE_BAND) {
@@ -1739,20 +1866,29 @@ class FelicityEqualizerSliders @JvmOverloads constructor(
     }
 
     private fun handleUp(@Suppress("UNUSED_PARAMETER") event: MotionEvent) {
+        removeCallbacks(longPressRunnable)
         if (activeBandIndex != NO_ACTIVE_BAND) startBandPressAnimation(activeBandIndex, false)
 
-        if (isScrollGesture && !centeredMode) {
-            velocityTracker?.computeCurrentVelocity(1000)
-            val flingVelocity = -(velocityTracker?.xVelocity ?: 0f)
-            if (abs(flingVelocity) > 50f) {
-                if (scrollFling.isRunning) scrollFling.cancel()
-                scrollFling.setMinValue(-maxOverscrollPx)
-                scrollFling.setMaxValue(maxScroll + maxOverscrollPx)
-                scrollFling.setStartVelocity(flingVelocity)
-                scrollFling.setStartValue(scrollOffset)
-                scrollFling.start()
-            } else {
-                snapScrollToBounds()
+        if (!centeredMode) {
+            val isOutOfBounds = scrollOffset !in 0f..maxScroll
+            var flung = false
+            if (isScrollGesture && !isOutOfBounds) {
+                velocityTracker?.computeCurrentVelocity(1000)
+                val flingVelocity = -(velocityTracker?.xVelocity ?: 0f)
+                if (abs(flingVelocity) > 50f) {
+                    if (scrollFling.isRunning) scrollFling.cancel()
+                    scrollFling.setMinValue(-maxOverscrollPx)
+                    scrollFling.setMaxValue(maxScroll + maxOverscrollPx)
+                    scrollFling.setStartVelocity(flingVelocity)
+                    scrollFling.setStartValue(scrollOffset)
+                    scrollFling.start()
+                    flung = true
+                }
+            }
+            if (!flung) {
+                velocityTracker?.computeCurrentVelocity(1000)
+                val springVelocity = if (isScrollGesture) -(velocityTracker?.xVelocity ?: 0f) else 0f
+                snapScrollToBounds(springVelocity)
             }
         }
 
@@ -1800,6 +1936,7 @@ class FelicityEqualizerSliders @JvmOverloads constructor(
         scrollOffsetAtDown = scrollOffset
         isScrollGesture = false
         isBandGesture = false
+        isLongPressTriggered = false
         peqTouchTarget = PeqTarget.NONE
         peqTouchBandIndex = -1
         activeBandIndex = NO_ACTIVE_BAND
@@ -1819,6 +1956,7 @@ class FelicityEqualizerSliders @JvmOverloads constructor(
             thumbYAtDown = gainToThumbY(preampDisplayGain)
             startBandPressAnimation(PREAMP_BAND_INDEX, true)
             context.vibrateEffect(VibrationEffect.EFFECT_TICK, TAG)
+            postDelayed(longPressRunnable, ViewConfiguration.getLongPressTimeout().toLong())
             parent?.requestDisallowInterceptTouchEvent(true)
             return
         }
@@ -1830,10 +1968,9 @@ class FelicityEqualizerSliders @JvmOverloads constructor(
             val halfSection = peqSectionWidthPx * 0.5f
             val hPad = PEQ_SECTION_H_PADDING_DP * d
             val arcR = peqKnobArcRadiusPx
-            val bgLeft = cx - halfSection + 3f * d
             val bgRight = cx + halfSection - 3f * d
             val bgTop = trackTop - sliderVerticalPaddingPx * 0.5f
-            val sliderCx = bgLeft + 3f * d + hPad + thumbHalfWidthPx
+            val sliderCx = cx - halfSection + hPad + thumbHalfWidthPx
             val delR = PEQ_DELETE_BTN_RADIUS_DP * d
             val delMargin = PEQ_DELETE_BTN_MARGIN_DP * d
             val delCx = bgRight - delR - delMargin
@@ -1842,8 +1979,14 @@ class FelicityEqualizerSliders @JvmOverloads constructor(
             // Mirror the knob center calculation from drawPeqSection so hit-test positions
             // always match what's actually drawn on screen (including landscape mode).
             val kc = computeKnobCenters(sliderCx)
+            val editCx = delCx - delR * 2.5f
 
             when {
+                dist(event.x, event.y, editCx, delCy) <= delR * 1.5f -> {
+                    peqTouchTarget = PeqTarget.EDIT_BUTTON
+                    peqTouchBandIndex = sectionIndex
+                    context.vibrateEffect(VibrationEffect.EFFECT_TICK, TAG)
+                }
                 dist(event.x, event.y, delCx, delCy) <= delR * 1.5f -> {
                     peqTouchTarget = PeqTarget.DELETE_BUTTON
                     peqTouchBandIndex = sectionIndex
@@ -1874,6 +2017,7 @@ class FelicityEqualizerSliders @JvmOverloads constructor(
                     thumbYAtDown = gainToThumbY(peqGainAtDown)
                     startPeqGainPressAnimation(sectionIndex, true)
                     context.vibrateEffect(VibrationEffect.EFFECT_TICK, TAG)
+                    postDelayed(longPressRunnable, ViewConfiguration.getLongPressTimeout().toLong())
                 }
             }
             parent?.requestDisallowInterceptTouchEvent(true)
@@ -1907,11 +2051,18 @@ class FelicityEqualizerSliders @JvmOverloads constructor(
         val dx = event.x - touchStartX
         val dy = event.y - touchStartY
 
+        if (isLongPressTriggered) return
+
         // Preamp slider drag.
         if (activeBandIndex == PREAMP_BAND_INDEX) {
             if (!isBandGesture && !isScrollGesture) {
-                if (abs(dy) > touchSlop) isBandGesture = true
-                else if (abs(dx) > touchSlop) isScrollGesture = true
+                if (abs(dy) > touchSlop) {
+                    removeCallbacks(longPressRunnable)
+                    isBandGesture = true
+                } else if (abs(dx) > touchSlop) {
+                    removeCallbacks(longPressRunnable)
+                    isScrollGesture = true
+                }
             }
             if (isBandGesture) {
                 val newGain = thumbYToGain(thumbYAtDown + dy).coerceIn(MIN_DB, MAX_DB)
@@ -1932,8 +2083,12 @@ class FelicityEqualizerSliders @JvmOverloads constructor(
         when (peqTouchTarget) {
             PeqTarget.GAIN_SLIDER -> {
                 if (!isBandGesture && !isScrollGesture) {
-                    if (abs(dy) > touchSlop) isBandGesture = true
+                    if (abs(dy) > touchSlop) {
+                        removeCallbacks(longPressRunnable)
+                        isBandGesture = true
+                    }
                     else if (abs(dx) > touchSlop) {
+                        removeCallbacks(longPressRunnable)
                         isScrollGesture = true
                         // Finger moved sideways — cancel the thumb press state.
                         startPeqGainPressAnimation(peqTouchBandIndex, false)
@@ -1955,14 +2110,21 @@ class FelicityEqualizerSliders @JvmOverloads constructor(
             }
             PeqTarget.Q_KNOB, PeqTarget.FREQ_KNOB -> {
                 if (peqTouchBandIndex < 0) return
+
+                // Start gesture when moved beyond touch slop.
+                // Since it's a knob, any movement counts as a gesture for the knob.
+                // We do NOT convert a knob drag into a horizontal scroll.
+                if (!isBandGesture && (abs(dx) > touchSlop || abs(dy) > touchSlop)) {
+                    isBandGesture = true
+                }
+
                 // A knob rotation gesture is never converted to a horizontal scroll — the
                 // user intentionally landed on the knob so we own all subsequent movement.
-                if (isScrollGesture) return
+                isScrollGesture = false
                 val cx = peqBandSectionCenterX(peqTouchBandIndex)
                 val halfSection = peqSectionWidthPx * 0.5f
                 val hPad = PEQ_SECTION_H_PADDING_DP * d
-                val bgLeft = cx - halfSection + 3f * d
-                val sliderCx = bgLeft + 3f * d + hPad + thumbHalfWidthPx
+                val sliderCx = cx - halfSection + hPad + thumbHalfWidthPx
 
                 // Mirror the knob center calculation from drawPeqSection (landscape-aware).
                 val kc = computeKnobCenters(sliderCx)
@@ -1998,7 +2160,7 @@ class FelicityEqualizerSliders @JvmOverloads constructor(
                     }
                 }
             }
-            PeqTarget.NONE, PeqTarget.ADD_BUTTON, PeqTarget.DELETE_BUTTON -> {
+            PeqTarget.NONE, PeqTarget.ADD_BUTTON, PeqTarget.DELETE_BUTTON, PeqTarget.EDIT_BUTTON -> {
                 // Treat as a plain horizontal scroll when no specific element was hit.
                 if (!isScrollGesture && abs(dx) > touchSlop) isScrollGesture = true
                 if (isScrollGesture && !centeredMode) {
@@ -2010,6 +2172,7 @@ class FelicityEqualizerSliders @JvmOverloads constructor(
     }
 
     private fun peqHandleUp(event: MotionEvent) {
+        removeCallbacks(longPressRunnable)
         if (activeBandIndex == PREAMP_BAND_INDEX) startBandPressAnimation(PREAMP_BAND_INDEX, false)
 
         // Release any knob or gain-slider press animations before list mutation.
@@ -2029,6 +2192,15 @@ class FelicityEqualizerSliders @JvmOverloads constructor(
             val dy = event.y - touchStartY
             if (abs(dx) < touchSlop * 2 && abs(dy) < touchSlop * 2) {
                 addPeqBand()
+                context.vibrateEffect(VibrationEffect.EFFECT_TICK, TAG)
+            }
+        }
+
+        if (peqTouchTarget == PeqTarget.EDIT_BUTTON && peqTouchBandIndex in peqBands.indices) {
+            val dx = event.x - touchStartX
+            val dy = event.y - touchStartY
+            if (abs(dx) < touchSlop * 2 && abs(dy) < touchSlop * 2) {
+                peqBandEditClickListener?.onPeqBandEditClick(peqTouchBandIndex, peqBands[peqTouchBandIndex])
                 context.vibrateEffect(VibrationEffect.EFFECT_TICK, TAG)
             }
         }
@@ -2054,18 +2226,26 @@ class FelicityEqualizerSliders @JvmOverloads constructor(
             }
         }
 
-        if (isScrollGesture && !centeredMode) {
-            velocityTracker?.computeCurrentVelocity(1000)
-            val flingVelocity = -(velocityTracker?.xVelocity ?: 0f)
-            if (abs(flingVelocity) > 50f) {
-                if (scrollFling.isRunning) scrollFling.cancel()
-                scrollFling.setMinValue(-maxOverscrollPx)
-                scrollFling.setMaxValue(maxScroll + maxOverscrollPx)
-                scrollFling.setStartVelocity(flingVelocity)
-                scrollFling.setStartValue(scrollOffset)
-                scrollFling.start()
-            } else {
-                snapScrollToBounds()
+        if (!centeredMode) {
+            val isOutOfBounds = scrollOffset < 0f || scrollOffset > maxScroll
+            var flung = false
+            if (isScrollGesture && !isOutOfBounds) {
+                velocityTracker?.computeCurrentVelocity(1000)
+                val flingVelocity = -(velocityTracker?.xVelocity ?: 0f)
+                if (abs(flingVelocity) > 50f) {
+                    if (scrollFling.isRunning) scrollFling.cancel()
+                    scrollFling.setMinValue(-maxOverscrollPx)
+                    scrollFling.setMaxValue(maxScroll + maxOverscrollPx)
+                    scrollFling.setStartVelocity(flingVelocity)
+                    scrollFling.setStartValue(scrollOffset)
+                    scrollFling.start()
+                    flung = true
+                }
+            }
+            if (!flung) {
+                velocityTracker?.computeCurrentVelocity(1000)
+                val springVelocity = if (isScrollGesture) -(velocityTracker?.xVelocity ?: 0f) else 0f
+                snapScrollToBounds(springVelocity)
             }
         }
 
@@ -2087,7 +2267,7 @@ class FelicityEqualizerSliders @JvmOverloads constructor(
     private fun dist(x1: Float, y1: Float, x2: Float, y2: Float): Float {
         val dx = x1 - x2;
         val dy = y1 - y2
-        return kotlin.math.sqrt((dx * dx + dy * dy).toDouble()).toFloat()
+        return sqrt((dx * dx + dy * dy).toDouble()).toFloat()
     }
 
     // -------------------------------------------------------------------------
@@ -2106,11 +2286,12 @@ class FelicityEqualizerSliders @JvmOverloads constructor(
         else -> rawTarget
     }
 
-    private fun snapScrollToBounds() {
+    private fun snapScrollToBounds(velocity: Float = 0f) {
         val target = scrollOffset.coerceIn(0f, maxScroll)
         if (scrollOffset == target) return
         if (scrollSpring.isRunning) scrollSpring.cancel()
         scrollSpring.setStartValue(scrollOffset)
+        scrollSpring.setStartVelocity(velocity)
         scrollSpring.animateToFinalPosition(target)
     }
 

@@ -12,6 +12,8 @@
     <FrameLayout
         android:layout_width="match_parent"
         android:layout_height="@dimen/padding_10"
+        android:clipChildren="false"
+        android:clipToPadding="false"
         android:layout_weight="1">
 
         <app.simple.felicity.decorations.pager.FelicityPager
@@ -24,8 +26,7 @@
             android:layout_width="match_parent"
             android:layout_height="match_parent"
             android:alpha="0.55"
-            app:vizMaxRenderHeight="0.30"
-            app:vizParticlesEnabled="true" />
+            app:vizMaxRenderHeight="0.30" />
 
         <app.simple.felicity.decorations.lrc.view.LrcLineView
             android:id="@+id/lrc"
@@ -42,6 +43,7 @@
         android:layout_height="1px" />
 
     <LinearLayout
+        android:id="@+id/strip_container"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal">
@@ -84,6 +86,15 @@
             app:buttonTintType="regular" />
 
         <app.simple.felicity.decorations.ripple.DynamicRippleImageButton
+            android:id="@+id/sleepTimer"
+            android:layout_width="0dp"
+            android:layout_weight="1"
+            android:layout_height="@dimen/button_size"
+            android:layout_marginEnd="@dimen/padding_1"
+            android:src="@drawable/ic_timer"
+            app:buttonTintType="regular" />
+
+        <app.simple.felicity.decorations.ripple.DynamicRippleImageButton
             android:id="@+id/menu"
             android:layout_width="0dp"
             android:layout_weight="1"
@@ -107,21 +118,11 @@
             android:layout_height="wrap_content"
             android:layout_gravity="center_vertical"
             android:paddingVertical="@dimen/padding_5"
+            android:drawableStart="@drawable/ic_queue_16dp"
+            android:drawablePadding="@dimen/padding_5"
             android:paddingHorizontal="@dimen/padding_10"
             app:appFontStyle="bold"
-            app:highlightMode="auto"
-            app:textColorStyle="primary" />
-
-        <app.simple.felicity.decorations.highlight.HighlightTextView
-            android:id="@+id/lyrics"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_gravity="center_vertical"
-            android:layout_marginStart="@dimen/padding_5"
-            android:paddingVertical="@dimen/padding_5"
-            android:paddingHorizontal="@dimen/padding_10"
-            android:text="@string/lyrics"
-            app:appFontStyle="bold"
+            app:drawableTintStyle="accent"
             app:highlightMode="auto"
             app:textColorStyle="primary" />
 
@@ -279,12 +280,12 @@
                 android:clipToPadding="false" />
 
             <app.simple.felicity.decorations.ripple.DynamicRippleImageButton
-                android:id="@+id/queue"
+                android:id="@+id/lyrics"
                 android:layout_width="@dimen/button_size"
                 android:layout_height="@dimen/button_size"
                 android:layout_gravity="center_vertical"
                 android:layout_marginEnd="@dimen/padding_1"
-                android:src="@drawable/ic_queue"
+                android:src="@drawable/ic_lyrics"
                 app:buttonTintType="regular" />
 
         </LinearLayout>

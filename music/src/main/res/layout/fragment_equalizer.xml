@@ -3,6 +3,7 @@
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:orientation="vertical"
+    android:clipChildren="false"
     android:layout_height="match_parent">
 
     <androidx.constraintlayout.widget.ConstraintLayout
@@ -56,6 +57,5 @@
             layout="@layout/screen_reverb" />
 
     </app.simple.felicity.decorations.views.FelicityViewFlipper>
-
 
 </app.simple.felicity.decorations.padding.PaddingAwareLinearLayout>

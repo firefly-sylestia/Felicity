@@ -4,7 +4,9 @@
       <w>Allpass</w>
       <w>Beatz</w>
       <w>Brainz</w>
+      <w>Coeff</w>
       <w>Coeffs</w>
+      <w>Debounces</w>
       <w>Freeverb</w>
       <w>Gumroad</w>
       <w>Hant</w>
@@ -13,6 +15,7 @@
       <w>Rizwan</w>
       <w>Türkçe</w>
       <w>aaudio</w>
+      <w>adlibs</w>
       <w>akon</w>
       <w>albumartist</w>
       <w>amplituda's</w>
@@ -26,6 +29,7 @@
       <w>diffusors</w>
       <w>discnumber</w>
       <w>externalstorage</w>
+      <w>freqs</w>
       <w>gumroad</w>
       <w>janking</w>
       <w>jlong</w>
@@ -33,12 +37,24 @@
       <w>kbit</w>
       <w>layouted</w>
       <w>logw</w>
+      <w>lyricsfile</w>
+      <w>maxX</w>
+      <w>maxY</w>
       <w>mbid</w>
       <w>mediastore</w>
       <w>microframes</w>
+      <w>minX</w>
+      <w>minY</w>
+      <w>pappus</w>
       <w>playhead</w>
+      <w>preamb</w>
+      <w>qfactor</w>
       <w>rasterizing</w>
+      <w>scrollY</w>
+      <w>scrollability</w>
       <w>snapshotted</w>
+      <w>startY</w>
+      <w>stopY</w>
       <w>totaltracks</w>
       <w>tracknumber</w>
       <w>tracktotal</w>

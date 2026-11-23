@@ -2,8 +2,6 @@ package app.simple.felicity.preferences
 
 import androidx.core.content.edit
 import app.simple.felicity.manager.SharedPreferences.getSharedPreferences
-import app.simple.felicity.preferences.UserInterfacePreferences.PLAYER_INTERFACE_DEFAULT
-import app.simple.felicity.preferences.UserInterfacePreferences.PLAYER_INTERFACE_FADED
 
 /**
  * Persisted preferences that control which interface variants are shown throughout the
@@ -17,11 +15,14 @@ object UserInterfacePreferences {
     const val LIKE_ICON_INSTEAD_OF_HEART = "like_icon_instead_of_heart"
 
     const val MARGIN_AROUND_MINIPLAYER = "margin_around_miniplayer"
+    const val MINIPLAYER_WIDTH = "miniplayer_width"
     const val HOME_INTERFACE = "home_interface_"
     const val PLAYER_INTERFACE = "player_interface_"
+    const val IMMERSIVE_MODE = "immersive_mode"
 
     private const val VOLUME_CONTROLS = "volume_controls"
     const val STACK_MEDIA_CONTROLS = "stack_media_controls"
+    const val SHOW_FORWARD_REWIND_BUTTONS = "show_forward_rewind_buttons"
     const val TIMER_POSITION = "timer_position"
     const val WAVEFORM_OPTICS = "waveform_optics"
 
@@ -51,6 +52,23 @@ object UserInterfacePreferences {
     const val TIMER_POSITION_CENTER = 1
     const val TIMER_POSITION_BOTTOM = 2
 
+    const val VOLUME_KNOB_POSITION = "volume_knob_position"
+
+    const val VOLUME_KNOB_POSITION_LEFT = 0
+    const val VOLUME_KNOB_POSITION_CENTER = 1
+    const val VOLUME_KNOB_POSITION_RIGHT = 2
+
+    const val WEATHER_EFFECT = "weather_effect"
+    const val WEATHER_EFFECT_OFF = 0
+    const val WEATHER_EFFECT_AUTO = 1
+    const val WEATHER_EFFECT_WINTER = 2
+    const val WEATHER_EFFECT_AUTUMN = 3
+    const val WEATHER_EFFECT_SUMMER = 4
+
+    const val MAX_LANDSCAPE_MINIPLAYER_WIDTH = 1.0f
+    const val MIN_LANDSCAPE_MINIPLAYER_WIDTH = 0f
+    const val DEFAULT_LANDSCAPE_MINIPLAYER_WIDTH = 0.8f
+
     fun setLikeIconInsteadOfThumb(value: Boolean) {
         getSharedPreferences().edit { putBoolean(LIKE_ICON_INSTEAD_OF_HEART, value) }
     }
@@ -67,9 +85,17 @@ object UserInterfacePreferences {
         return getSharedPreferences().getBoolean(MARGIN_AROUND_MINIPLAYER, true)
     }
 
+    fun setMiniplayerWidth(value: Float) {
+        getSharedPreferences().edit { putFloat(MINIPLAYER_WIDTH, value) }
+    }
+
+    fun getMiniplayerWidth(): Float {
+        return getSharedPreferences().getFloat(MINIPLAYER_WIDTH, DEFAULT_LANDSCAPE_MINIPLAYER_WIDTH)
+    }
+
     fun getHomeInterface(): Int {
         return getSharedPreferences()
-            .getInt(HOME_INTERFACE, HOME_INTERFACE_SIMPLE)
+            .getInt(HOME_INTERFACE, HOME_INTERFACE_DASHBOARD)
     }
 
     fun setHomeInterface(value: Int) {
@@ -104,6 +130,18 @@ object UserInterfacePreferences {
             }
     }
 
+    fun isImmersiveMode(): Boolean {
+        return getSharedPreferences()
+            .getBoolean(IMMERSIVE_MODE, false)
+    }
+
+    fun setImmersiveMode(enabled: Boolean) {
+        getSharedPreferences()
+            .edit {
+                putBoolean(IMMERSIVE_MODE, enabled)
+            }
+    }
+
     fun isVolumeControls(): Boolean {
         return getSharedPreferences()
             .getBoolean(VOLUME_CONTROLS, true)
@@ -128,6 +166,18 @@ object UserInterfacePreferences {
             }
     }
 
+    fun isForwardRewindButtons(): Boolean {
+        return getSharedPreferences()
+            .getBoolean(SHOW_FORWARD_REWIND_BUTTONS, true)
+    }
+
+    fun setForwardRewindButtons(enabled: Boolean) {
+        getSharedPreferences()
+            .edit {
+                putBoolean(SHOW_FORWARD_REWIND_BUTTONS, enabled)
+            }
+    }
+
     fun getTimerPosition(): Int {
         return getSharedPreferences()
             .getInt(TIMER_POSITION, TIMER_POSITION_CENTER)
@@ -137,6 +187,30 @@ object UserInterfacePreferences {
         getSharedPreferences()
             .edit {
                 putInt(TIMER_POSITION, position)
+            }
+    }
+
+    fun getVolumeKnobPosition(): Int {
+        return getSharedPreferences()
+            .getInt(VOLUME_KNOB_POSITION, VOLUME_KNOB_POSITION_CENTER)
+    }
+
+    fun setVolumeKnobPosition(position: Int) {
+        getSharedPreferences()
+            .edit {
+                putInt(VOLUME_KNOB_POSITION, position)
+            }
+    }
+
+    fun getWeatherEffect(): Int {
+        return getSharedPreferences()
+            .getInt(WEATHER_EFFECT, WEATHER_EFFECT_OFF)
+    }
+
+    fun setWeatherEffect(effect: Int) {
+        getSharedPreferences()
+            .edit {
+                putInt(WEATHER_EFFECT, effect)
             }
     }
 

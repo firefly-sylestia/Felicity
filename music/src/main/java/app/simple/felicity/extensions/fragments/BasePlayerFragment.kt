@@ -19,7 +19,9 @@ import app.simple.felicity.decorations.lrc.view.LrcLineView
 import app.simple.felicity.decorations.pager.FelicityPager
 import app.simple.felicity.decorations.pager.ImagePageAdapter
 import app.simple.felicity.decorations.popups.SimpleDialog
+import app.simple.felicity.decorations.ripple.DynamicRippleImageButton
 import app.simple.felicity.decorations.seekbars.WaveformSeekbar
+import app.simple.felicity.decorations.theme.ThemeImageButton
 import app.simple.felicity.decorations.utils.TextViewUtils.setTextWithEffect
 import app.simple.felicity.decorations.utils.TextViewUtils.setTextWithFade
 import app.simple.felicity.decorations.views.FavoriteButton
@@ -27,7 +29,8 @@ import app.simple.felicity.decorations.views.FelicityMediaControls
 import app.simple.felicity.decorations.views.FelicityVisualizer
 import app.simple.felicity.decorations.views.FlexStackLayout
 import app.simple.felicity.dialogs.app.AudioPipelineDialog.Companion.showAudioPipeline
-import app.simple.felicity.dialogs.player.VisualizerConfig.Companion.showVisualizerConfig
+import app.simple.felicity.dialogs.player.SleepTimerDialog.Companion.openSleepTimerDialog
+import app.simple.felicity.dialogs.player.VisualizerMenu.Companion.showVisualizerMenu
 import app.simple.felicity.dialogs.player.WaveformMenu.Companion.showWaveformMenu
 import app.simple.felicity.engine.managers.MediaPlaybackManager
 import app.simple.felicity.engine.managers.VisualizerManager
@@ -39,7 +42,6 @@ import app.simple.felicity.preferences.AlbumArtPreferences
 import app.simple.felicity.preferences.AudioPreferences
 import app.simple.felicity.preferences.PlayerPreferences
 import app.simple.felicity.preferences.UserInterfacePreferences
-import app.simple.felicity.preferences.VisualizerPreferences
 import app.simple.felicity.repository.constants.MediaConstants
 import app.simple.felicity.repository.models.Audio
 import app.simple.felicity.repository.utils.AudioUtils.getProperAlbum
@@ -97,17 +99,30 @@ abstract class BasePlayerFragment : MediaFragment() {
      */
     private var lastLoadedAudioId: Long = -1L
 
+    /**
+     * True if the immersive view controls are currently being shown.
+     * This is saved across configuration changes.
+     */
+    private var isImmersiveControlsVisible = true
+
+    /**
+     * Timer used to fade out buttons in immersive mode.
+     */
+    private val immersiveFadeRunnable = Runnable {
+        fadeImmersiveViews(false)
+    }
+
     /** The pager that cycles through album art pages. */
     protected abstract val pager: FelicityPager
 
     /** The text view showing the current queue position (e.g. "3/12"). */
     protected abstract val count: TextView
 
-    /** The button that opens the playing queue panel. */
-    protected abstract val queue: View
-
     /** The button that opens the search panel. */
     protected abstract val search: View
+
+    /** The button that opens the sleep timer dialog. */
+    protected abstract val sleepTimer: DynamicRippleImageButton
 
     /** The button that opens the overflow / song menu dialog. */
     protected abstract val menu: View
@@ -119,7 +134,7 @@ abstract class BasePlayerFragment : MediaFragment() {
     protected abstract val pcmInfo: TextView
 
     /** The waveform seekbar that shows playback progress. */
-    protected abstract val seekbar: WaveformSeekbar
+    protected abstract val waveformSeekbar: WaveformSeekbar
 
     /** The button that navigates to the lyrics panel. */
     protected abstract val lyrics: View
@@ -160,17 +175,40 @@ abstract class BasePlayerFragment : MediaFragment() {
      */
     protected abstract val mediaControls: FelicityMediaControls
 
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putBoolean(KEY_IMMERSIVE_CONTROLS_VISIBLE, isImmersiveControlsVisible)
+    }
+
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
+
+        savedInstanceState?.let {
+            isImmersiveControlsVisible = it.getBoolean(KEY_IMMERSIVE_CONTROLS_VISIBLE, true)
+        }
+
         swipeDownListener = SwipeDownToCloseListener(this, requireView())
 
-        requireView().setOnTouchListener(swipeDownListener)
+        requireView().setOnTouchListener { view, event ->
+            when (event.action) {
+                MotionEvent.ACTION_DOWN,
+                MotionEvent.ACTION_UP -> {
+                    resetImmersiveFadeTimer()
+                    view.performClick()
+                }
+            }
+            swipeDownListener?.passOnTouchEvent(event) ?: false
+        }
+
         requireHiddenMiniPlayer()
+        requireImmersiveMode()
         updateState()
         setVisualizerState()
-        setVisualizerCapsState()
         setLyricsState()
         updateMediaControlOverlap()
+        updateSleepTimerIcon()
+
+        mediaControls.showSeekButtons = UserInterfacePreferences.isForwardRewindButtons()
 
         // Mirror swipe-down-to-close behavior on the album art pager so that a downward
         // swipe on the cover image dismisses the player, exactly like swiping on any other
@@ -183,11 +221,13 @@ abstract class BasePlayerFragment : MediaFragment() {
         // dismiss-or-snap-back logic that ACTION_UP would normally trigger.
         pager.setOnVerticalDragListener(object : FelicityPager.OnVerticalDragListener {
             override fun onVerticalDrag(totalDeltaY: Float, event: MotionEvent) {
+                resetImmersiveFadeTimer()
                 // event.rawY - totalDeltaY reconstructs the raw Y at gesture start.
                 swipeDownListener?.passExternalDrag(event, event.rawY - totalDeltaY)
             }
 
             override fun onVerticalDragEnd(totalDeltaY: Float, velocityY: Float, event: MotionEvent) {
+                resetImmersiveFadeTimer()
                 swipeDownListener?.endExternalDrag(event.rawY - totalDeltaY)
             }
         })
@@ -200,13 +240,15 @@ abstract class BasePlayerFragment : MediaFragment() {
                             if (UserInterfacePreferences.isCarouselInterface()) {
                                 iv.loadArtCoverWithPayload(audio)
                             } else {
-                                iv.loadArtCover(audio,
-                                                shadow = false,
-                                                crop = true,
-                                                roundedCorners = false,
-                                                blur = false,
-                                                greyscale = AlbumArtPreferences.isGreyscaleEnabled(),
-                                                darken = false)
+                                iv.loadArtCover(
+                                        item = audio,
+                                        shadow = false,
+                                        crop = true,
+                                        roundedCorners = false,
+                                        blur = false,
+                                        greyscale = AlbumArtPreferences.isGreyscaleEnabled(),
+                                        darken = false
+                                )
                             }
                         },
                         scaleType = if (UserInterfacePreferences.isCarouselInterface()) {
@@ -216,6 +258,9 @@ abstract class BasePlayerFragment : MediaFragment() {
                         },
                         canceller = { iv ->
                             Glide.with(iv).clear(iv)
+                        },
+                        onClick = { _, _ ->
+                            resetImmersiveFadeTimer()
                         },
                         onLongClick = { pos, iv ->
                             openMenu()
@@ -276,12 +321,8 @@ abstract class BasePlayerFragment : MediaFragment() {
             }
         })
 
-        queue.setOnClickListener {
-            openFragment(PlayingQueue.newInstance(fromPlayer = true), PlayingQueue.TAG)
-        }
-
         count.setOnClickListener {
-            queue.callOnClick()
+            openFragment(PlayingQueue.newInstance(fromPlayer = true), PlayingQueue.TAG)
         }
 
         artist.setOnClickListener {
@@ -294,6 +335,10 @@ abstract class BasePlayerFragment : MediaFragment() {
 
         search.setOnClickListener {
             openFragment(Search.newInstance(), Search.TAG)
+        }
+
+        sleepTimer.setOnClickListener {
+            childFragmentManager.openSleepTimerDialog()
         }
 
         menu.setOnClickListener {
@@ -332,17 +377,37 @@ abstract class BasePlayerFragment : MediaFragment() {
             }
         }
 
+        viewLifecycleOwner.lifecycleScope.launch {
+            MediaPlaybackManager.sleepTimerStateFlow.collect {
+                updateSleepTimerIcon()
+            }
+        }
+
         // Set initial icon based on saved preference.
         updateRepeatButtonIcon(PlayerPreferences.getRepeatMode())
 
-        seekbar.setOnSeekListener(object : WaveformSeekbar.OnSeekListener {
+        waveformSeekbar.setOnSeekListener(object : WaveformSeekbar.OnSeekListener {
             override fun onSeekEnd(positionMs: Long) {
                 MediaPlaybackManager.seekTo(positionMs)
+
+                if (UserInterfacePreferences.isImmersiveMode()) {
+                    waveformSeekbar.hideLabels()
+                }
+            }
+
+            override fun onSeekStart() {
+                if (UserInterfacePreferences.isImmersiveMode()) {
+                    waveformSeekbar.showLabels()
+                }
             }
         })
 
-        seekbar.setOnFlingEndListener { positionMs ->
+        waveformSeekbar.setOnFlingEndListener { positionMs ->
             MediaPlaybackManager.seekTo(positionMs)
+
+            if (UserInterfacePreferences.isImmersiveMode()) {
+                waveformSeekbar.hideLabels()
+            }
         }
 
         // When the user taps a bar (no drag) we show the bookmark context menu
@@ -351,21 +416,21 @@ abstract class BasePlayerFragment : MediaFragment() {
         //            openBookmarkMenu(positionMs)
         //        }
 
-        seekbar.setOnBarLongTapListener { positionMs ->
+        waveformSeekbar.setOnBarLongTapListener { positionMs ->
             openBookmarkMenu(positionMs)
         }
 
-        seekbar.setLeftLabelProvider { progress, _, _ ->
+        waveformSeekbar.setLeftLabelProvider { progress, _, _ ->
             DateUtils.formatElapsedTime(progress / 1000L)
         }
 
-        seekbar.setRightLabelProvider { _, _, max ->
+        waveformSeekbar.setRightLabelProvider { _, _, max ->
             DateUtils.formatElapsedTime(max / 1000L)
         }
 
         // Observe waveform amplitude data from the ViewModel.
         waveformViewModel.getWaveformData().observe(viewLifecycleOwner) { amplitudes ->
-            seekbar.setAmplitudes(amplitudes)
+            waveformSeekbar.setAmplitudes(amplitudes)
         }
 
         lyrics.setOnClickListener {
@@ -386,7 +451,7 @@ abstract class BasePlayerFragment : MediaFragment() {
 
         visualizerButton.setOnClickListener {
             if (shouldShowProcessors()) {
-                childFragmentManager.showVisualizerConfig()
+                childFragmentManager.showVisualizerMenu()
             } else {
                 showWarning("All processors are disabled. Visualizers are not available in 32-bit output mode.")
             }
@@ -415,7 +480,7 @@ abstract class BasePlayerFragment : MediaFragment() {
         // seekbar so the dot indicators always match what is stored in the database.
         viewLifecycleOwner.lifecycleScope.launch {
             bookmarksViewModel.bookmarks.collect { bookmarkList ->
-                seekbar.bookmarks = bookmarkList.map { it.timestampMs }.toSet()
+                waveformSeekbar.bookmarks = bookmarkList.map { it.timestampMs }.toSet()
             }
         }
     }
@@ -448,10 +513,6 @@ abstract class BasePlayerFragment : MediaFragment() {
         visualizer.visibility = if (PlayerPreferences.isVisualizerEnabled()) View.VISIBLE else View.GONE
     }
 
-    private fun setVisualizerCapsState() {
-        visualizer.capsEnabled = VisualizerPreferences.areCapsEnabled()
-    }
-
     private fun setLyricsState() {
         lrc.visibility = if (PlayerPreferences.isShowLyrics()) View.VISIBLE else View.GONE
     }
@@ -481,7 +542,7 @@ abstract class BasePlayerFragment : MediaFragment() {
     private fun updateMediaControlOverlap() {
         seekbarContainer.isOverlapping = UserInterfacePreferences.isStackMediaControls()
 
-        seekbar.labelGravity = if (seekbarContainer.isOverlapping) {
+        waveformSeekbar.labelGravity = if (seekbarContainer.isOverlapping) {
             when (UserInterfacePreferences.getTimerPosition()) {
                 UserInterfacePreferences.TIMER_POSITION_TOP -> WaveformSeekbar.LABEL_GRAVITY_TOP
                 UserInterfacePreferences.TIMER_POSITION_BOTTOM -> WaveformSeekbar.LABEL_GRAVITY_BOTTOM
@@ -504,13 +565,13 @@ abstract class BasePlayerFragment : MediaFragment() {
         artist.text = audio.getProperArtists()
         album.text = audio.getProperAlbum()
         pcmInfo.text = PcmInfoFormatter.formatPcmInfo(audio)
-        seekbar.setDuration(audio.duration)
-        seekbar.setProgress(MediaPlaybackManager.getSeekPosition(), animate = false)
+        waveformSeekbar.setDuration(audio.duration)
+        waveformSeekbar.setProgress(MediaPlaybackManager.getSeekPosition(), animate = false)
         updatePlayButtonState(MediaPlaybackManager.isPlaying())
         updateFavoriteIcon(audio)
-        seekbar.optics = UserInterfacePreferences.getWaveformOptics()
+        waveformSeekbar.optics = UserInterfacePreferences.getWaveformOptics()
 
-        seekbar.layoutMode = if (UserInterfacePreferences.isWaveformFullMode()) {
+        waveformSeekbar.layoutMode = if (UserInterfacePreferences.isWaveformFullMode()) {
             WaveformSeekbar.LAYOUT_MODE_FULL
         } else {
             WaveformSeekbar.LAYOUT_MODE_SCROLLING
@@ -525,6 +586,16 @@ abstract class BasePlayerFragment : MediaFragment() {
         // Route through the media controls so the grow/shrink animation fires along with
         // the play/pause icon morph — two birds, one stone.
         mediaControls.setPlaying(isPlaying)
+    }
+
+    private fun updateSleepTimerIcon() {
+        if (MediaPlaybackManager.isSleepTimerRunning()) {
+            sleepTimer.setImageResource(R.drawable.ic_timer)
+            sleepTimer.setTintMode(ThemeImageButton.ACCENT)
+        } else {
+            sleepTimer.setImageResource(R.drawable.ic_timer_off_outlined)
+            sleepTimer.setTintMode(ThemeImageButton.REGULAR)
+        }
     }
 
     private fun updateRepeatButtonIcon(repeatMode: Int) {
@@ -568,7 +639,15 @@ abstract class BasePlayerFragment : MediaFragment() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        if (isImmersiveControlsVisible) {
+            resetImmersiveFadeTimer()
+        }
+    }
+
     override fun onDestroyView() {
+        handler.removeCallbacks(immersiveFadeRunnable)
         // Release the direct twin-buffer connection so the audio thread no longer holds
         // a WeakReference to the now-destroyed visualizer view.
         VisualizerManager.processor?.clearDirectOutput()
@@ -621,7 +700,7 @@ abstract class BasePlayerFragment : MediaFragment() {
             artist.setTextWithEffect(audio.getProperArtists(), forward, 50L)
             album.setTextWithEffect(audio.getProperAlbum(), forward, 100L)
             pcmInfo.text = PcmInfoFormatter.formatPcmInfo(audio)
-            seekbar.setDurationWithReset(audio.duration)
+            waveformSeekbar.setDurationWithReset(audio.duration)
             lrc.clear()
             lyricsViewModel.loadLrcData()
             bookmarksViewModel.loadBookmarks()
@@ -629,17 +708,21 @@ abstract class BasePlayerFragment : MediaFragment() {
 
         // Always sync seek position. For a same-song re-emission (e.g., predictive back
         // cancel) this is the only seekbar call needed — no reset, no animation from zero.
-        seekbar.setProgress(MediaPlaybackManager.getSeekPosition(), animate = true)
+        waveformSeekbar.setProgress(MediaPlaybackManager.getSeekPosition(), animate = true)
         updateFavoriteIcon(audio)
 
         // Defer waveform decoding until ExoPlayer is actually playing to avoid
         // Amplituda and ExoPlayer fighting over the same file I/O resources.
         loadWaveformWhenReady(audio)
+
+        if (!isImmersiveControlsVisible && UserInterfacePreferences.isImmersiveMode()) {
+            fadeImmersiveViews(show = false, animate = false)
+        }
     }
 
     override fun onSeekChanged(seek: Long) {
         super.onSeekChanged(seek)
-        seekbar.setProgress(seek, animate = true)
+        waveformSeekbar.setProgress(seek, animate = true)
         lrc.updateTime(seek + lyricsViewModel.syncOffset)
     }
 
@@ -681,8 +764,12 @@ abstract class BasePlayerFragment : MediaFragment() {
      * Updates the favorite button icon from the [Audio] model's [Audio.isFavorite] field.
      * No database query required — the model is the source of truth.
      */
-    private fun updateFavoriteIcon(audio: Audio) {
-        favorite.setFavorite(audio.isFavorite, true)
+    private fun updateFavoriteIcon(audio: Audio, quiet: Boolean = UserInterfacePreferences.isImmersiveMode()) {
+        if (quiet) {
+            favorite.setFavoriteQuietly(audio.isFavorite)
+        } else {
+            favorite.setFavorite(audio.isFavorite)
+        }
     }
 
     override fun onSharedPreferenceChanged(sharedPreferences: SharedPreferences?, key: String?) {
@@ -691,11 +778,8 @@ abstract class BasePlayerFragment : MediaFragment() {
             PlayerPreferences.VISUALIZER_ENABLED -> {
                 setVisualizerState()
             }
-            VisualizerPreferences.CAPS_ENABLED -> {
-                setVisualizerCapsState()
-            }
             PlayerPreferences.WAVEFORM_MODE -> {
-                seekbar.waveformMode = PlayerPreferences.getWaveformMode()
+                waveformSeekbar.waveformMode = PlayerPreferences.getWaveformMode()
             }
             PlayerPreferences.PCM_INFO_MODE -> {
                 val audio = MediaPlaybackManager.getCurrentSong() ?: return
@@ -708,10 +792,10 @@ abstract class BasePlayerFragment : MediaFragment() {
                 updateMediaControlOverlap()
             }
             UserInterfacePreferences.WAVEFORM_OPTICS -> {
-                seekbar.optics = UserInterfacePreferences.getWaveformOptics()
+                waveformSeekbar.optics = UserInterfacePreferences.getWaveformOptics()
             }
             UserInterfacePreferences.WAVEFORM_FULL_MODE -> {
-                seekbar.layoutMode = if (UserInterfacePreferences.isWaveformFullMode()) {
+                waveformSeekbar.layoutMode = if (UserInterfacePreferences.isWaveformFullMode()) {
                     WaveformSeekbar.LAYOUT_MODE_FULL
                 } else {
                     WaveformSeekbar.LAYOUT_MODE_SCROLLING
@@ -803,10 +887,58 @@ abstract class BasePlayerFragment : MediaFragment() {
         )
     }
 
+    private fun getImmersiveViews(): List<View> {
+        return listOf(
+                count, search, sleepTimer, menu, repeat, pcmInfo,
+                lyrics, favorite, equalizer, visualizerButton, shuffle
+        )
+    }
+
+    open fun fadeImmersiveViews(show: Boolean, animate: Boolean = true) {
+        isImmersiveControlsVisible = show
+        val targetAlpha = if (show) 1f else 0f
+
+        getImmersiveViews().forEach { view ->
+            if (view.alpha != targetAlpha) {
+                if (animate) {
+                    if (show) view.visibility = View.VISIBLE
+                    view.animate()
+                        .alpha(targetAlpha)
+                        .setDuration(500L)
+                        .withEndAction {
+                            view.isEnabled = show
+                            if (!show) view.visibility = View.INVISIBLE
+                        }
+                        .start()
+                } else {
+                    view.alpha = targetAlpha
+                    view.isEnabled = show
+                    view.visibility = if (show) View.VISIBLE else View.INVISIBLE
+                }
+            } else {
+                view.isEnabled = show
+                view.visibility = if (show) View.VISIBLE else View.INVISIBLE
+            }
+        }
+
+        waveformSeekbar.setLabelsVisible(show)
+    }
+
+    private fun resetImmersiveFadeTimer() {
+        if (!UserInterfacePreferences.isImmersiveMode()) return
+
+        fadeImmersiveViews(true)
+        showSystemBarsTransient()
+        handler.removeCallbacks(immersiveFadeRunnable)
+        handler.postDelayed(immersiveFadeRunnable, IMMERSIVE_MODE_ON_DELAY)
+    }
+
     companion object {
         /** Back-stack tag shared by all player interface variants. */
         const val TAG = "BasePlayer"
         private const val LOG_TAG = "BasePlayerFragment"
+        private const val KEY_IMMERSIVE_CONTROLS_VISIBLE = "immersive_controls_visible"
+        private const val IMMERSIVE_MODE_ON_DELAY = 2500L
     }
 }
 

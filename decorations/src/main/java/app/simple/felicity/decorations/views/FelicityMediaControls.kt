@@ -16,10 +16,10 @@ import android.view.View
 import android.view.ViewConfiguration
 import android.view.animation.OvershootInterpolator
 import androidx.core.content.ContextCompat
+import androidx.core.content.withStyledAttributes
 import androidx.interpolator.view.animation.FastOutSlowInInterpolator
 import app.simple.felicity.decoration.R
 import app.simple.felicity.decorations.ripple.FelicityRippleDrawable
-import app.simple.felicity.decorations.views.FelicityMediaControls.Companion.SEEK_INTERVAL_MS
 import app.simple.felicity.manager.SharedPreferences.registerSharedPreferenceChangeListener
 import app.simple.felicity.manager.SharedPreferences.unregisterSharedPreferenceChangeListener
 import app.simple.felicity.preferences.AppearancePreferences
@@ -67,10 +67,22 @@ class FelicityMediaControls @JvmOverloads constructor(
      * runtime will trigger a layout pass so the view resizes correctly — no orphaned
      * empty space left behind!
      */
+    fun showSeekButtons(show: Boolean, animate: Boolean = true) {
+        if (this.showSeekButtons == show) return
+        this.showSeekButtons = show
+        // Changing the boolean above naturally causes requestLayout() + invalidate()
+        // to recompute the width required for either 3 or 5 buttons.
+        // We'll lean into the existing Android LayoutTransition or just instantly snap
+        // if animate = false since the view itself actually resizes.
+    }
+
     var showSeekButtons: Boolean = true
         set(value) {
             if (field == value) return
             field = value
+            if (width > 0 && height > 0) {
+                computeLayout(width, height)
+            }
             requestLayout()
             invalidate()
         }
@@ -85,6 +97,9 @@ class FelicityMediaControls @JvmOverloads constructor(
             val clamped = value.coerceIn(0f, 1f)
             if (field == clamped) return
             field = clamped
+            if (width > 0 && height > 0) {
+                computeLayout(width, height)
+            }
             requestLayout()
             invalidate()
         }
@@ -202,10 +217,10 @@ class FelicityMediaControls @JvmOverloads constructor(
 
         // Pull any XML attributes the layout author may have set for us
         if (attrs != null) {
-            val a = context.obtainStyledAttributes(attrs, R.styleable.FelicityMediaControls, defStyleAttr, 0)
-            showSeekButtons = a.getBoolean(R.styleable.FelicityMediaControls_showSeekButtons, true)
-            buttonsSizePercent = a.getFloat(R.styleable.FelicityMediaControls_buttonsSizePercent, 1.0f).coerceIn(0f, 1f)
-            a.recycle()
+            context.withStyledAttributes(attrs, R.styleable.FelicityMediaControls, defStyleAttr, 0) {
+                showSeekButtons = getBoolean(R.styleable.FelicityMediaControls_showSeekButtons, true)
+                buttonsSizePercent = getFloat(R.styleable.FelicityMediaControls_buttonsSizePercent, 1.0f).coerceIn(0f, 1f)
+            }
         }
 
         if (!isInEditMode) {
@@ -219,7 +234,7 @@ class FelicityMediaControls @JvmOverloads constructor(
         mediaControlListener = listener
     }
 
-    // ── Theme helpers ──────────────────────────────────────────────────────────
+    // == Theme helpers ==========================================================
 
     /** Reads the current theme and accent colors into local fields. */
     private fun pullTheme() {
@@ -270,7 +285,7 @@ class FelicityMediaControls @JvmOverloads constructor(
         }
     }
 
-    // ── Layout ────────────────────────────────────────────────────────────────
+    // == Layout ================================================================
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         // Natural height = play button diameter scaled by the size percent
@@ -382,7 +397,7 @@ class FelicityMediaControls @JvmOverloads constructor(
         }
     }
 
-    // ── Drawing ───────────────────────────────────────────────────────────────
+    // == Drawing ===============================================================
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
@@ -460,7 +475,7 @@ class FelicityMediaControls @JvmOverloads constructor(
         else -> 1f
     }
 
-    // ── Playback state ────────────────────────────────────────────────────────
+    // == Playback state ========================================================
 
     /**
      * Updates the play/pause state. When [animate] is true, the icon crossfade and
@@ -527,7 +542,7 @@ class FelicityMediaControls @JvmOverloads constructor(
         }
     }
 
-    // ── Touch handling ────────────────────────────────────────────────────────
+    // == Touch handling ========================================================
 
     @SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(event: MotionEvent): Boolean {
@@ -643,7 +658,7 @@ class FelicityMediaControls @JvmOverloads constructor(
         holdRunnable = null
     }
 
-    // ── Drawable.Callback — lets ripple animations trigger redraws ─────────
+    // == Drawable.Callback — lets ripple animations trigger redraws =========
 
     override fun invalidateDrawable(drawable: Drawable) {
         invalidate()
@@ -657,7 +672,7 @@ class FelicityMediaControls @JvmOverloads constructor(
         handler.removeCallbacks(what)
     }
 
-    // ── Theme change listeners ─────────────────────────────────────────────
+    // == Theme change listeners =============================================
 
     private fun applyThemeChanges() {
         pullTheme()

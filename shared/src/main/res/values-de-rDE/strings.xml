@@ -288,7 +288,6 @@
     <string name="files">Dateien</string>
     <string name="style">Stil</string>
     <string name="latency">Latenz</string>
-    <string name="particles">Partikel</string>
     <string name="slide">Schieben</string>
     <string name="typewriting">Tippen</string>
     <string name="no_effect">Kein Effekt</string>
@@ -417,6 +416,8 @@
     <string name="done">Fertig</string>
     <string name="manage_music_folders">Musikordner verwalten</string>
     <string name="manage_music_folders_desc">Verwalte lokale Verzeichnisse für die Bibliotheksindexierung.</string>
+    <string name="immersive_mode">Immersiver Modus</string>
+    <string name="immersive_mode_summary">Nutze die App im Vollbildmodus, wenn visuell aufwendige Bildschirme aktiv sind.</string>
     <!-- Dashboard section titles and chips -->
     <string name="top_artists">Top-Künstler</string>
     <string name="top_albums">Top-Alben</string>
@@ -472,7 +473,6 @@
     <string name="show_lyrics_summary">Zeige Songtexte auf dem Player-Bildschirm.</string>
     <string name="carousel">Carousel</string>
     <string name="carousel_ui_desc">Einfache Player-Stil mit Karussell-Art Albumkunst.</string>
-    <string name="caps">Caps</string>
     <string name="current_queue">Warteschlange %1$d</string>
     <string name="rename">Umbenennen</string>
     <string name="volume_controls">Lautstärkeregler</string>

@@ -3,8 +3,8 @@ package app.simple.felicity.repository.models
 import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.PrimaryKey
-import app.simple.felicity.repository.models.EqualizerPreset.Companion.PRESET_TYPE_GRAPHIC
-import app.simple.felicity.repository.models.EqualizerPreset.Companion.PRESET_TYPE_PARAMETRIC
+import app.simple.felicity.shared.models.ParsedBand
+import java.util.Locale
 
 /**
  * Represents a saved equalizer preset — a snapshot of either a 10-band graphic EQ curve
@@ -66,6 +66,12 @@ data class EqualizerPreset(
         val presetType: String = PRESET_TYPE_GRAPHIC,
 
         /**
+         * The category of the preset, such as [CATEGORY_SAVED_PRESETS] or [CATEGORY_HEADPHONE_PROFILES].
+         */
+        @ColumnInfo(name = "category", defaultValue = CATEGORY_SAVED_PRESETS)
+        val category: String = CATEGORY_SAVED_PRESETS,
+
+        /**
          * Pipe-separated PEQ band data for parametric presets. Each band is stored as
          * "gain:q:freq" — three floats separated by colons, bands separated by pipes.
          * This field is null for graphic presets and not meaningful in that context.
@@ -75,7 +81,7 @@ data class EqualizerPreset(
 ) {
 
     /** Returns true when this is a parametric EQ preset rather than a graphic one. */
-    fun isPeq(): Boolean = presetType == PRESET_TYPE_PARAMETRIC
+    fun isPEQ(): Boolean = presetType == PRESET_TYPE_PARAMETRIC
 
     /**
      * Parses [bandGainsRaw] back into a proper [FloatArray] of 10 gains.
@@ -97,7 +103,7 @@ data class EqualizerPreset(
      *
      * @return List of [Triple]<gainDb, qFactor, frequencyHz> for each PEQ band.
      */
-    fun getPeqBands(): List<Triple<Float, Float, Float>> {
+    fun getPeqBands(): List<ParsedBand> {
         val raw = peqBandsRaw ?: return emptyList()
         return raw.split("|").mapNotNull { segment ->
             val parts = segment.split(":")
@@ -106,7 +112,9 @@ data class EqualizerPreset(
                 val gain = parts[0].toFloatOrNull() ?: return@mapNotNull null
                 val q = parts[1].toFloatOrNull() ?: return@mapNotNull null
                 val freq = parts[2].toFloatOrNull() ?: return@mapNotNull null
-                Triple(gain, q, freq)
+                val color = parts.getOrNull(3)?.toIntOrNull() ?: 0
+                val type = parts.getOrNull(4)?.toIntOrNull() ?: 0
+                ParsedBand(gain, q, freq, color, type)
             }
         }
     }
@@ -116,6 +124,9 @@ data class EqualizerPreset(
         const val PRESET_TYPE_GRAPHIC = "GRAPHIC"
         const val PRESET_TYPE_PARAMETRIC = "PARAMETRIC"
 
+        const val CATEGORY_SAVED_PRESETS = "SAVED_PRESETS"
+        const val CATEGORY_HEADPHONE_PROFILES = "HEADPHONE_PROFILES"
+
         /**
          * Converts a [FloatArray] of 10 band gains into the comma-separated string format
          * expected by [bandGainsRaw]. This is the reverse of [getBandGains].
@@ -124,7 +135,9 @@ data class EqualizerPreset(
          * @return A compact comma-separated string like "3.0,-1.5,0.0,...".
          */
         fun gainsToRaw(gains: FloatArray): String {
-            return gains.joinToString(",") { "%.2f".format(it) }
+            return gains.joinToString(",") {
+                "%.2f".format(Locale.US, it)
+            }
         }
 
         /**
@@ -134,9 +147,9 @@ data class EqualizerPreset(
          * @param bands List of triples — each is (gainDb, qFactor, frequencyHz).
          * @return A compact pipe-separated string ready to store in the database.
          */
-        fun peqBandsToRaw(bands: List<Triple<Float, Float, Float>>): String {
-            return bands.joinToString("|") { (gain, q, freq) ->
-                "%.2f:%.2f:%.2f".format(gain, q, freq)
+        fun peqBandsToRaw(bands: List<ParsedBand>): String {
+            return bands.joinToString("|") { band ->
+                "%.2f:%.2f:%.2f:%d:%d".format(java.util.Locale.US, band.gain, band.q, band.frequencyHz, band.color, band.type)
             }
         }
 
@@ -154,7 +167,8 @@ data class EqualizerPreset(
                 name: String,
                 gains: FloatArray,
                 preampDb: Float = 0f,
-                isBuiltIn: Boolean = false
+                isBuiltIn: Boolean = false,
+                category: String = CATEGORY_SAVED_PRESETS
         ): EqualizerPreset {
             return EqualizerPreset(
                     name = name,
@@ -162,6 +176,7 @@ data class EqualizerPreset(
                     preampDb = preampDb,
                     isBuiltIn = isBuiltIn,
                     presetType = PRESET_TYPE_GRAPHIC,
+                    category = category,
                     dateCreated = System.currentTimeMillis()
             )
         }
@@ -177,15 +192,18 @@ data class EqualizerPreset(
          */
         fun fromPeqBands(
                 name: String,
-                bands: List<Triple<Float, Float, Float>>,
-                preampDb: Float = 0f
+                bands: List<ParsedBand>,
+                preampDb: Float = 0f,
+                isBuiltIn: Boolean = false,
+                category: String = CATEGORY_SAVED_PRESETS
         ): EqualizerPreset {
             return EqualizerPreset(
                     name = name,
                     bandGainsRaw = gainsToRaw(FloatArray(10)),
                     preampDb = preampDb,
-                    isBuiltIn = false,
+                    isBuiltIn = isBuiltIn,
                     presetType = PRESET_TYPE_PARAMETRIC,
+                    category = category,
                     peqBandsRaw = peqBandsToRaw(bands),
                     dateCreated = System.currentTimeMillis()
             )

@@ -7,6 +7,7 @@ import app.simple.felicity.extensions.viewmodels.WrappedViewModel
 import app.simple.felicity.preferences.EqualizerPreferences
 import app.simple.felicity.repository.database.instances.EqualizerDatabase
 import app.simple.felicity.repository.models.EqualizerPreset
+import app.simple.felicity.shared.models.ParsedBand
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -62,7 +63,7 @@ class EqualizerViewModel(application: Application) : WrappedViewModel(applicatio
         .getAllPresetsFlow()
         .stateIn(
                 scope = viewModelScope,
-                started = SharingStarted.WhileSubscribed(5_000),
+                started = SharingStarted.Eagerly,
                 initialValue = emptyList()
         )
 
@@ -74,18 +75,31 @@ class EqualizerViewModel(application: Application) : WrappedViewModel(applicatio
      */
     val currentPresetName: StateFlow<String> = combine(
             EqualizerManager.bandGainsFlow,
+            EqualizerManager.peqBandsFlow,
             EqualizerManager.preampFlow,
+            EqualizerManager.eqModeFlow,
             allPresets
-    ) { gains, preamp, presets ->
-        findMatchingPreset(gains, preamp, presets)?.name ?: CUSTOM_PRESET_NAME
+    ) { gains, peqBands, preamp, mode, presets ->
+        if (presets.isEmpty()) return@combine CUSTOM_PRESET_NAME
+
+        if (mode == EqualizerPreferences.EQ_MODE_PARAMETRIC) {
+            findMatchingPeqPreset(peqBands, preamp, presets)?.name ?: CUSTOM_PRESET_NAME
+        } else {
+            findMatchingPreset(gains, preamp, presets)?.name ?: CUSTOM_PRESET_NAME
+        }
     }.stateIn(
             scope = viewModelScope,
-            started = SharingStarted.WhileSubscribed(5_000),
+            started = SharingStarted.Eagerly,
             initialValue = CUSTOM_PRESET_NAME
     )
 
     init {
         viewModelScope.launch(Dispatchers.IO) {
+            // Seed built-in presets if they aren't in the database yet.
+            if (db.equalizerPresetDao().getBuiltInPresetCount() == 0) {
+                db.equalizerPresetDao().insertPresets(EqualizerDatabase.builtInPresets())
+            }
+
             _initialState.value = EqualizerInitialState(
                     isEqEnabled = EqualizerPreferences.isEqEnabled(),
                     bandGains = EqualizerPreferences.getAllBandGains(),
@@ -101,7 +115,6 @@ class EqualizerViewModel(application: Application) : WrappedViewModel(applicatio
                     reverbDamp = EqualizerPreferences.getReverbDamp(),
                     pitch = EqualizerPreferences.getPitch(),
                     playbackSpeed = EqualizerPreferences.getPlaybackSpeed(),
-                    replayGainDb = EqualizerPreferences.getReplayGainDb(),
                     pitchSpeedLocked = EqualizerPreferences.isPitchSpeedLocked(),
                     isParametricMode = EqualizerPreferences.isParametricEqMode(),
                     peqBandsRaw = EqualizerPreferences.getPeqBandsRaw()
@@ -126,10 +139,17 @@ class EqualizerViewModel(application: Application) : WrappedViewModel(applicatio
             name: String,
             gains: FloatArray,
             preampDb: Float,
+            category: String = EqualizerPreset.CATEGORY_SAVED_PRESETS,
             onDuplicate: () -> Unit,
             onSuccess: () -> Unit
     ) {
         val trimmedName = name.trim()
+
+        if (trimmedName.equals(CUSTOM_PRESET_NAME, ignoreCase = true)) {
+            onDuplicate()
+            return
+        }
+
         viewModelScope.launch(Dispatchers.IO) {
             val existing = db.equalizerPresetDao().getPresetByName(trimmedName)
             if (existing != null) {
@@ -140,7 +160,8 @@ class EqualizerViewModel(application: Application) : WrappedViewModel(applicatio
                     name = trimmedName,
                     gains = gains,
                     preampDb = preampDb,
-                    isBuiltIn = false
+                    isBuiltIn = false,
+                    category = category
             )
             db.equalizerPresetDao().insertPreset(preset)
             withContext(Dispatchers.Main) { onSuccess() }
@@ -159,12 +180,19 @@ class EqualizerViewModel(application: Application) : WrappedViewModel(applicatio
      */
     fun savePeqPreset(
             name: String,
-            bands: List<Triple<Float, Float, Float>>,
+            bands: List<ParsedBand>,
             preampDb: Float,
+            category: String = EqualizerPreset.CATEGORY_SAVED_PRESETS,
             onDuplicate: () -> Unit,
             onSuccess: () -> Unit
     ) {
         val trimmedName = name.trim()
+
+        if (trimmedName.equals(CUSTOM_PRESET_NAME, ignoreCase = true)) {
+            onDuplicate()
+            return
+        }
+
         viewModelScope.launch(Dispatchers.IO) {
             val existing = db.equalizerPresetDao().getPresetByName(trimmedName)
             if (existing != null) {
@@ -174,10 +202,41 @@ class EqualizerViewModel(application: Application) : WrappedViewModel(applicatio
             val preset = EqualizerPreset.fromPeqBands(
                     name = trimmedName,
                     bands = bands,
-                    preampDb = preampDb
+                    preampDb = preampDb,
+                    isBuiltIn = false,
+                    category = category
             )
             db.equalizerPresetDao().insertPreset(preset)
             withContext(Dispatchers.Main) { onSuccess() }
+        }
+    }
+
+    /**
+     * Auto-saves an imported PEQ preset. It handles duplicate names by appending a number
+     * e.g., "My Preset (1)".
+     */
+    fun autoSaveImportedPeqPreset(
+            name: String,
+            bands: List<ParsedBand>,
+            preampDb: Float
+    ) {
+        var baseName = name.trim()
+        if (baseName.isBlank()) {
+            baseName = "Imported PEQ Preset"
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            var uniqueName = baseName
+            var counter = 1
+            while (db.equalizerPresetDao().getPresetByName(uniqueName) != null) {
+                uniqueName = "$baseName ($counter)"
+                counter++
+            }
+            val preset = EqualizerPreset.fromPeqBands(
+                    name = uniqueName,
+                    bands = bands,
+                    preampDb = preampDb
+            )
+            db.equalizerPresetDao().insertPreset(preset)
         }
     }
 
@@ -195,11 +254,47 @@ class EqualizerViewModel(application: Application) : WrappedViewModel(applicatio
             presets: List<EqualizerPreset>
     ): EqualizerPreset? {
         return presets.firstOrNull { preset ->
+            if (preset.presetType != EqualizerPreset.PRESET_TYPE_GRAPHIC) {
+                return@firstOrNull false
+            }
+
             val presetGains = preset.getBandGains()
             val gainsMatch = gains.size == presetGains.size &&
-                    gains.indices.all { i -> abs(gains[i] - presetGains[i]) < GAIN_TOLERANCE }
+                    gains.indices.all { i ->
+                        abs(gains[i] - presetGains[i]) < GAIN_TOLERANCE
+                    }
+
             val preampMatch = abs(preamp - preset.preampDb) < GAIN_TOLERANCE
+
             gainsMatch && preampMatch
+        }
+    }
+
+    private fun findMatchingPeqPreset(
+            bands: List<ParsedBand>,
+            preamp: Float,
+            presets: List<EqualizerPreset>
+    ): EqualizerPreset? {
+        return presets.firstOrNull { preset ->
+            if (preset.presetType != EqualizerPreset.PRESET_TYPE_PARAMETRIC) {
+                return@firstOrNull false
+            }
+
+            val presetBands = preset.getPeqBands()
+            val bandsMatch = bands.size == presetBands.size &&
+                    bands.all { band ->
+                        presetBands.any { presetBand ->
+                            abs(band.gain - presetBand.gain) < GAIN_TOLERANCE &&
+                                    abs(band.q - presetBand.q) < 0.1f &&
+                                    abs(band.frequencyHz - presetBand.frequencyHz) < 1.5f &&
+                                    band.color == presetBand.color &&
+                                    band.type == presetBand.type
+                        }
+                    }
+
+            val preampMatch = abs(preamp - preset.preampDb) < GAIN_TOLERANCE
+
+            bandsMatch && preampMatch
         }
     }
 
@@ -222,7 +317,6 @@ class EqualizerViewModel(application: Application) : WrappedViewModel(applicatio
      * @property reverbDamp Reverb high-frequency damping in [0 .. 1].
      * @property pitch Pitch offset in semitones [-12 .. +12]. 0 = no shift.
      * @property playbackSpeed Playback speed multiplier in [0.5 .. 2.0]. 1.0 = normal.
-     * @property replayGainDb Manual replay gain offset in dB [-15 .. +15]. 0.0 = unity.
      * @property pitchSpeedLocked Whether the pitch and speed knobs are linked together.
      * @property isParametricMode Whether the EQ is currently in parametric mode.
      * @property peqBandsRaw Previously saved PEQ band configuration, null if never used.
@@ -242,7 +336,6 @@ class EqualizerViewModel(application: Application) : WrappedViewModel(applicatio
             val reverbDamp: Float,
             val pitch: Float,
             val playbackSpeed: Float,
-            val replayGainDb: Float = 0f,
             val pitchSpeedLocked: Boolean = false,
             val isParametricMode: Boolean = false,
             val peqBandsRaw: String? = null
@@ -264,7 +357,6 @@ class EqualizerViewModel(application: Application) : WrappedViewModel(applicatio
                     && reverbDamp == other.reverbDamp
                     && pitch == other.pitch
                     && playbackSpeed == other.playbackSpeed
-                    && replayGainDb == other.replayGainDb
                     && pitchSpeedLocked == other.pitchSpeedLocked
                     && isParametricMode == other.isParametricMode
                     && peqBandsRaw == other.peqBandsRaw
@@ -285,7 +377,6 @@ class EqualizerViewModel(application: Application) : WrappedViewModel(applicatio
             result = 31 * result + reverbDamp.hashCode()
             result = 31 * result + pitch.hashCode()
             result = 31 * result + playbackSpeed.hashCode()
-            result = 31 * result + replayGainDb.hashCode()
             result = 31 * result + pitchSpeedLocked.hashCode()
             result = 31 * result + isParametricMode.hashCode()
             result = 31 * result + peqBandsRaw.hashCode()
@@ -305,6 +396,6 @@ class EqualizerViewModel(application: Application) : WrappedViewModel(applicatio
          * the live gain and a preset's stored gain. Half of 0.01 covers the rounding error
          * introduced by the "%.2f" serialization round-trip used in [EqualizerPreset.gainsToRaw].
          */
-        private const val GAIN_TOLERANCE = 0.005f
+        private const val GAIN_TOLERANCE = 0.6f
     }
 }

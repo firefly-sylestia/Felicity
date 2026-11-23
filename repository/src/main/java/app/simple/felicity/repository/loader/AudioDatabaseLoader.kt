@@ -163,7 +163,7 @@ class AudioDatabaseLoader @Inject constructor(private val context: Context) {
             val startTime = System.currentTimeMillis()
             Log.d(TAG, "Starting audio file processing...")
 
-            notificationGeneration = notification.begin()
+            notificationGeneration = notification.begin(context)
 
             val dao = audioDatabase.audioDao()
 
@@ -173,86 +173,106 @@ class AudioDatabaseLoader @Inject constructor(private val context: Context) {
                 return
             }
 
+            // Phase 1 — collect every audio file from all SAF tree URIs.
+            notification.setPhase(notificationGeneration, LoaderNotification.Phase.DISCOVERING)
+            val allSAFFiles = mutableListOf<SAFFile>()
+            val scanner = AudioScanner()
+            var foundCount = 0
+            for (uriStr in treeUriStrings) {
+                myScope.coroutineContext.ensureActive()
+                val treeUri = uriStr.toUri()
+                val collectStart = System.currentTimeMillis()
+                val files = scanner.getAudioFiles(context, treeUri) {
+                    notification.updateFound(notificationGeneration, ++foundCount)
+                }
+                Log.d(TAG, "Found ${files.size} audio files in $uriStr (collected in ${System.currentTimeMillis() - collectStart}ms)")
+                allSAFFiles.addAll(files)
+            }
+
             Log.d(TAG, "Reconciling database with current SAF grants...")
-            reconcileDatabase(treeUriStrings)
+            notification.setPhase(notificationGeneration, LoaderNotification.Phase.CLEANING)
+            val discoveredUris = allSAFFiles.map { it.uri.toString() }.toSet()
+
+            val allAudio = dao?.getAllAudioListAll() ?: emptyList()
+
+            reconcileDatabase(treeUriStrings, discoveredUris, allAudio)
 
             Log.d(TAG, "Indexing existing audio files in the database...")
+            notification.setPhase(notificationGeneration, LoaderNotification.Phase.CHECKING)
 
             val pathToStoredId = HashMap<String, Long>()
-            dao?.getAllAudioListAll()?.forEach { audio ->
+            allAudio.forEach { audio ->
                 indexedMap[audio.uri] = IndexedFile(audio.dateModified, audio.size, audio.id, audio.isFavorite, audio.isAlwaysSkip)
                 pathToStoredId[audio.uri] = audio.id
             }
 
             Log.d(TAG, "Indexing complete. Found ${indexedMap.size} existing entries in the database.")
 
-            // Phase 1 — collect every audio file from all SAF tree URIs.
-            val allSAFFiles = mutableListOf<SAFFile>()
-            val scanner = AudioScanner()
-            for (uriStr in treeUriStrings) {
-                myScope.coroutineContext.ensureActive()
-                val treeUri = uriStr.toUri()
-                val collectStart = System.currentTimeMillis()
-                val files = scanner.getAudioFiles(context, treeUri)
-                Log.d(TAG, "Found ${files.size} audio files in $uriStr (collected in ${System.currentTimeMillis() - collectStart}ms)")
-                allSAFFiles.addAll(files)
+            val filesToProcess = allSAFFiles.filter { shouldProcess(it) }
+            notification.setTotal(notificationGeneration, filesToProcess.size)
+            if (filesToProcess.isNotEmpty()) {
+                notification.setPhase(notificationGeneration, LoaderNotification.Phase.READING)
             }
-
-            notification.setTotal(notificationGeneration, allSAFFiles.size)
-            Log.d(TAG, "Total audio files to evaluate: ${allSAFFiles.size}")
-
+            Log.d(TAG, "Total audio files found: ${allSAFFiles.size}, to process: ${filesToProcess.size}")
 
             val processedCount = AtomicInteger(0)
 
             val dbChannel = Channel<PendingWrite>(capacity = Channel.BUFFERED)
 
             val consumerJob = myScope.launch {
-                val insertBatch = mutableListOf<Audio>()
-                val updateBatch = mutableListOf<Audio>()
+                try {
+                    val insertBatch = mutableListOf<Audio>()
+                    val updateBatch = mutableListOf<Audio>()
 
-                for (write in dbChannel) {
-                    indexedMap[write.path] = write.indexedFile
+                    for (write in dbChannel) {
+                        indexedMap[write.path] = write.indexedFile
 
-                    when (write) {
-                        is PendingWrite.Insert -> {
-                            insertBatch.add(write.audio)
-                            if (insertBatch.size >= BATCH_SIZE) {
-                                val batch = insertBatch.toList()
-                                insertBatch.clear()
-                                Log.d(TAG, "Inserting batch of ${batch.size} audio items")
-                                dao?.insertBatch(batch)
+                        when (write) {
+                            is PendingWrite.Insert -> {
+                                insertBatch.add(write.audio)
+                                if (insertBatch.size >= BATCH_SIZE) {
+                                    val batch = insertBatch.toList()
+                                    insertBatch.clear()
+                                    Log.d(TAG, "Inserting batch of ${batch.size} audio items")
+                                    dao?.insertBatch(batch)
+                                }
                             }
-                        }
-                        is PendingWrite.Update -> {
-                            updateBatch.add(write.audio)
-                            if (updateBatch.size >= BATCH_SIZE) {
-                                val batch = updateBatch.toList()
-                                updateBatch.clear()
-                                Log.d(TAG, "Updating batch of ${batch.size} audio items")
-                                dao?.update(batch)
+                            is PendingWrite.Update -> {
+                                updateBatch.add(write.audio)
+                                if (updateBatch.size >= BATCH_SIZE) {
+                                    val batch = updateBatch.toList()
+                                    updateBatch.clear()
+                                    Log.d(TAG, "Updating batch of ${batch.size} audio items")
+                                    dao?.update(batch)
+                                }
                             }
                         }
                     }
-                }
 
-                if (insertBatch.isNotEmpty()) {
-                    Log.d(TAG, "Inserting final batch of ${insertBatch.size} audio items")
-                    dao?.insertBatch(insertBatch)
-                }
-                if (updateBatch.isNotEmpty()) {
-                    Log.d(TAG, "Updating final batch of ${updateBatch.size} audio items")
-                    dao?.update(updateBatch)
+                    if (insertBatch.isNotEmpty()) {
+                        Log.d(TAG, "Inserting final batch of ${insertBatch.size} audio items")
+                        dao?.insertBatch(insertBatch)
+                    }
+                    if (updateBatch.isNotEmpty()) {
+                        Log.d(TAG, "Updating final batch of ${updateBatch.size} audio items")
+                        dao?.update(updateBatch)
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Consumer job failed, cancelling dbChannel to prevent producer deadlocks", e)
+                    dbChannel.cancel(CancellationException("Consumer job died", e))
+                    throw e
                 }
             }
 
             // Phase 2 — process each SAFFile in parallel coroutines.
             val pendingJobs = mutableListOf<Job>()
 
-            allSAFFiles.forEach { safFile ->
+            filesToProcess.forEach { safFile ->
                 myScope.coroutineContext.ensureActive()
 
                 val uriKey = safFile.uri.toString()
-                if (shouldProcess(safFile)) {
+
+                run {
                     val producerJob = myScope.launch {
                         semaphore.acquire()
                         try {
@@ -267,7 +287,6 @@ class AudioDatabaseLoader @Inject constructor(private val context: Context) {
                                 Log.w(TAG, "Failed to extract metadata for: ${safFile.name}")
                                 return@launch
                             }
-
 
                             val storedId = pathToStoredId[uriKey]
                             val stored = indexedMap[uriKey]
@@ -284,11 +303,6 @@ class AudioDatabaseLoader @Inject constructor(private val context: Context) {
                             }
 
                             dbChannel.send(write)
-
-                            val done = processedCount.incrementAndGet()
-                            if (done % LoaderNotification.NOTIFICATION_UPDATE_INTERVAL == 0) {
-                                notification.updateProgress(notificationGeneration, done)
-                            }
                         } catch (e: CancellationException) {
                             Log.d(TAG, "Processing canceled for: ${safFile.name}")
                             throw e
@@ -296,6 +310,7 @@ class AudioDatabaseLoader @Inject constructor(private val context: Context) {
                             Log.e(TAG, "Error processing $uriKey", e)
                         } finally {
                             semaphore.release()
+                            notification.updateProgress(notificationGeneration, processedCount.incrementAndGet())
                         }
                     }
 
@@ -304,21 +319,19 @@ class AudioDatabaseLoader @Inject constructor(private val context: Context) {
             }
 
             pendingJobs.joinAll()
+
+            if (pendingJobs.isNotEmpty()) {
+                notification.updateProgress(notificationGeneration, filesToProcess.size, force = true)
+                notification.setPhase(notificationGeneration, LoaderNotification.Phase.SAVING)
+            }
             dbChannel.close()
             consumerJob.join()
-
-            // Only push the "100% done" update when we actually processed some files.
-            // If everything was already up to date and pendingJobs was empty, posting
-            // a final progress update would cause a split-second notification flash
-            // (indeterminate → 100% → dismissed) that looks broken to the user.
-            if (pendingJobs.isNotEmpty()) {
-                notification.updateProgress(notificationGeneration, allSAFFiles.size, force = true)
-            }
 
             // Post-processing: fill in real filesystem paths for any audio rows that are missing one.
             // We query each content URI directly for the DATA column — same way MediaStoreCover
             // fetches album IDs — and batch-update the rows in one final write.
             Log.d(TAG, "Resolving filesystem paths from MediaStore...")
+            notification.setPhase(notificationGeneration, LoaderNotification.Phase.FINISHING)
             resolveAndUpdatePaths(dao)
 
             Log.d(TAG, "Audio file processing complete in ${(System.currentTimeMillis() - startTime) / 1000} seconds.")
@@ -332,19 +345,33 @@ class AudioDatabaseLoader @Inject constructor(private val context: Context) {
         } catch (e: Exception) {
             Log.e(TAG, "Error during audio file processing", e)
         } finally {
-            if (notificationGeneration != -1) {
-                // Generation-aware dismissal: if a newer scan already bumped the
-                // generation, this quietly does nothing so the newer scan's
-                // notification stays untouched. Force-dismissing here was exactly
-                // what made the notification flicker whenever a refresh overlapped
-                // a running scan.
+            // Generation-aware dismissal: if a newer scan already bumped the
+            // generation, dismiss() quietly does nothing and returns false, so the
+            // newer scan's notification stays untouched. Force-dismissing here was
+            // exactly what made the notification flicker whenever a refresh
+            // overlapped a running scan.
+            //
+            // Crucially, `owned` also gates the isScanRunning reset below. A scan
+            // that was superseded (canceled) by a newer one must NEVER flip
+            // isScanRunning back to false — doing so unconditionally let a stale,
+            // already-canceled coroutine's cleanup race with the genuinely active
+            // scan, letting a stray third scan sneak in, bump the notification
+            // generation again, and then itself get canceled with nothing left to
+            // ever call dismiss() on the now-current generation. That left the
+            // "Scanning Library" notification stuck forever — most noticeable on
+            // fast scans (e.g. no new songs found) where this race window is most
+            // likely to be hit.
+            val owned = if (notificationGeneration != -1) {
                 notification.dismiss(notificationGeneration)
             } else {
                 // begin() itself failed (e.g. POST_NOTIFICATIONS was revoked) —
                 // make sure nothing stale is left showing.
                 notification.dismissForce()
+                true
             }
-            isScanRunning.set(false)
+            if (owned) {
+                isScanRunning.set(false)
+            }
         }
     }
 
@@ -357,13 +384,11 @@ class AudioDatabaseLoader @Inject constructor(private val context: Context) {
      * - If the SAF tree that granted us access has been revoked entirely, we remove
      *   everything that lived inside that tree so the library doesn't ghost.
      */
-    private suspend fun reconcileDatabase(grantedTreeUriStrings: Set<String>) {
+    private suspend fun reconcileDatabase(grantedTreeUriStrings: Set<String>, discoveredUris: Set<String>, allAudio: List<Audio>) {
         val dao = audioDatabase.audioDao() ?: return
 
         dao.deleteStalePathDuplicates()
         Log.d(TAG, "Stale path-duplicate purge complete.")
-
-        val allAudio = dao.getAllAudioListAll()
 
         val toDelete = mutableListOf<Audio>()
         val toUpdate = mutableListOf<Audio>()
@@ -372,8 +397,18 @@ class AudioDatabaseLoader @Inject constructor(private val context: Context) {
             val path = audio.uri
 
             if (path.startsWith("content://")) {
-                val docFile = DocumentFile.fromSingleUri(context, path.toUri())
+                // FAST PATH: If the URI was discovered in the bulk SAF scan, it definitely exists.
+                // This bypasses the extremely slow DocumentFile.exists() IPC call for 99.9% of the library.
+                if (discoveredUris.contains(path)) {
+                    if (!audio.isAvailable) {
+                        Log.d(TAG, "Restoring available SAF file: $path")
+                        audio.isAvailable = true
+                        toUpdate.add(audio)
+                    }
+                    return@forEach
+                }
 
+                // SLOW PATH / REMOVAL PATH: The file was not found in the current SAF trees.
                 // Check if the tree that was covering this file is still in our granted list.
                 // We compare the tree document IDs directly using DocumentsContract so that
                 // encoding differences (e.g. %3A vs :) can never cause a false mismatch.
@@ -393,17 +428,17 @@ class AudioDatabaseLoader @Inject constructor(private val context: Context) {
                         toDelete.add(audio)
                         indexedMap.remove(path)
                     }
-                    docFile == null || !docFile.exists() -> {
-                        if (audio.isAvailable) {
-                            Log.d(TAG, "SAF document gone, deleting: $path")
-                            toDelete.add(audio)
-                            indexedMap.remove(path)
+                    else -> {
+                        // The tree is still granted, but the file wasn't discovered.
+                        // We do one final fallback exists() check just to be safe (e.g. for files that were renamed/hidden).
+                        val docFile = DocumentFile.fromSingleUri(context, path.toUri())
+                        if (docFile == null || !docFile.exists()) {
+                            if (audio.isAvailable) {
+                                Log.d(TAG, "SAF document gone, deleting: $path")
+                                toDelete.add(audio)
+                                indexedMap.remove(path)
+                            }
                         }
-                    }
-                    !audio.isAvailable -> {
-                        Log.d(TAG, "Restoring available SAF file: $path")
-                        audio.isAvailable = true
-                        toUpdate.add(audio)
                     }
                 }
             }
@@ -423,6 +458,17 @@ class AudioDatabaseLoader @Inject constructor(private val context: Context) {
     private suspend fun resolveAndUpdatePaths(dao: AudioDao?) {
         if (dao == null) return
 
+        val allAudio = dao.getAllAudioListAll()
+
+        // FAST PATH: Check if any tracks actually need path resolution first.
+        // If everything has a path, we can skip querying the MediaStore entirely!
+        val missingPaths = allAudio.filter { it.path == null }
+        if (missingPaths.isEmpty()) {
+            Log.d(TAG, "All paths already resolved, nothing to update")
+            return
+        }
+
+        // SLOW PATH: We have tracks missing real paths. Query the entire MediaStore.
         // One MediaStore query covers the whole library — no per-file ContentResolver calls.
         val pathMap = context.buildMediaStorePathMap()
         if (pathMap.isEmpty()) {
@@ -430,31 +476,26 @@ class AudioDatabaseLoader @Inject constructor(private val context: Context) {
             return
         }
 
-        val allAudio = dao.getAllAudioListAll()
         val toUpdate = mutableListOf<Audio>()
 
-        allAudio.forEach { audio ->
-            if (audio.path == null) {
-                // Lower-case all three tags to match the case-insensitive map keys.
-                val key = Triple(
-                        audio.title?.lowercase() ?: "",
-                        audio.artist?.lowercase() ?: "",
-                        audio.album?.lowercase() ?: ""
-                )
-                val resolved = pathMap[key]
-                if (resolved != null) {
-                    audio.path = resolved
-                    audio.name = resolved.substringAfterLast('/')
-                    toUpdate.add(audio)
-                }
+        missingPaths.forEach { audio ->
+            // Lower-case all three tags to match the case-insensitive map keys.
+            val key = Triple(
+                    audio.title?.lowercase() ?: "",
+                    audio.artist?.lowercase() ?: "",
+                    audio.album?.lowercase() ?: ""
+            )
+            val resolved = pathMap[key]
+            if (resolved != null) {
+                audio.path = resolved
+                audio.name = resolved.substringAfterLast('/')
+                toUpdate.add(audio)
             }
         }
 
         if (toUpdate.isNotEmpty()) {
             Log.d(TAG, "Resolved paths for ${toUpdate.size} audio entries")
             dao.update(toUpdate)
-        } else {
-            Log.d(TAG, "All paths already resolved, nothing to update")
         }
     }
 

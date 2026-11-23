@@ -1,13 +1,16 @@
 package app.simple.felicity.engine.processors
 
+import android.os.Handler
+import android.os.Looper
+import android.view.Choreographer
 import android.view.View
 import androidx.annotation.OptIn
 import androidx.media3.common.C
 import androidx.media3.common.audio.AudioProcessor
 import androidx.media3.common.audio.BaseAudioProcessor
 import androidx.media3.common.util.UnstableApi
-import app.simple.felicity.engine.processors.VisualizerProcessor.Companion.BAND_COUNT
-import app.simple.felicity.engine.processors.VisualizerProcessor.Companion.FFT_SIZE
+import app.simple.felicity.engine.processors.VisualizerProcessor.Companion.MAX_QUEUED_NS
+import app.simple.felicity.preferences.AudioPreferences
 import java.lang.ref.WeakReference
 import java.nio.ByteBuffer
 import java.util.concurrent.atomic.AtomicBoolean
@@ -17,12 +20,13 @@ import kotlin.math.pow
  * An [AudioProcessor] that uses a PFFFT-backed native FFT to compute 40 logarithmically-spaced
  * frequency band magnitudes and delivers them via a lock-free twin-buffer mechanism.
  *
- * On each full [FFT_SIZE]-sample window the processor calls [nativeProcessInto], which
- * applies a Hann window, executes the PFFFT real-forward transform, and writes per-band
- * magnitudes directly into the current back buffer. The [AtomicBoolean] inside
- * [DirectOutput] is then toggled to promote the back buffer to front, and
- * [View.postInvalidate] is called on the registered view — all without allocating a
- * single object on the audio hot path.
+ * On each full [fftSize]-sample window the processor calls [nativeProcessInto], which
+ * applies a Hann window, executes the PFFFT real-forward transform, and queues the
+ * per-band magnitudes. A Choreographer callback on the main thread replays the queued
+ * frames at real-time pace into the current back buffer of [DirectOutput], toggles the
+ * [AtomicBoolean] to promote it to front, and invalidates the registered view. The audio
+ * thread allocates nothing on this path, and bursty sinks (e.g. AudioTrack, which is fed
+ * well ahead of playback) still yield a steady visual update rate.
  *
  * A legacy [VisualizerListener] interface is retained for backward-compatibility; it is
  * only invoked when no [DirectOutput] is connected (i.e., [setDirectOutput] has not been
@@ -57,10 +61,12 @@ class VisualizerProcessor : BaseAudioProcessor() {
     // Band & FFT configuration
 
     val bandCount: Int = BAND_COUNT
-    private val fftSize = FFT_SIZE
+
+    @Volatile
+    private var fftSize = AudioPreferences.getFftResolution()
 
     /** Circular buffer that accumulates mono PCM samples before each FFT window. */
-    private val sampleBuffer = FloatArray(fftSize)
+    private var sampleBuffer = FloatArray(fftSize)
     private var bufferIndex = 0
 
     /** Logarithmically-spaced bin boundaries: `bandEdges[k]..bandEdges[k+1]` is the range for band k. */
@@ -187,13 +193,88 @@ class VisualizerProcessor : BaseAudioProcessor() {
     @Volatile
     private var directOutput: DirectOutput? = null
 
+    // Frame pacing
+
+    /**
+     * Sinks hand audio over in uneven bursts (the AudioTrack path in particular, because
+     * ExoPlayer writes several decoded chunks ahead of playback). Publishing every FFT frame
+     * the moment it is computed means a burst of N frames collapses into a single visible
+     * update. Frames are therefore queued here and replayed at real-time pace from the
+     * main thread on each display frame, so the view always receives a steady stream.
+     */
+    private val frameRing = Array(FRAME_RING_CAPACITY) { FloatArray(BAND_COUNT) }
+    private val frameDurationsNs = LongArray(FRAME_RING_CAPACITY)
+    private val frameLock = Any()
+    private var frameHead = 0
+    private var frameCount = 0
+    private var queuedNs = 0L
+
+    /** Producer-owned scratch so the FFT never runs while [frameLock] is held. */
+    private val scratchBands = FloatArray(BAND_COUNT)
+
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private val tickScheduled = AtomicBoolean(false)
+
+    @Volatile
+    private var isPlaybackPaused = false
+
+    /** Main-thread only: time credit (ns) available to release queued frames. */
+    private var paceBudgetNs = 0L
+    private var lastTickNs = 0L
+
+    private val startTick = Runnable {
+        lastTickNs = 0L
+        paceBudgetNs = 0L
+        Choreographer.getInstance().postFrameCallback(frameCallback)
+    }
+
+    private val frameCallback = Choreographer.FrameCallback { frameTimeNanos -> onVsync(frameTimeNanos) }
+
     // Lifecycle
 
     init {
         computeBandEdges(DEFAULT_SAMPLE_RATE)
-        nativeHandle = nativeCreate(FFT_SIZE)
+        nativeHandle = nativeCreate(fftSize)
         if (nativeHandle != 0L) {
             nativeSetBandEdges(nativeHandle, bandEdges, BAND_COUNT)
+        }
+    }
+
+    @Volatile
+    private var pendingFftSize = -1
+
+    /**
+     * Dynamically updates the FFT resolution and re-allocates internal buffers.
+     * Requests an update which will be processed safely on the audio thread.
+     */
+    fun updateFftResolution(newFftSize: Int) {
+        if (fftSize == newFftSize) return
+        pendingFftSize = newFftSize
+    }
+
+    private fun checkPendingFftSize() {
+        val newSize = pendingFftSize
+        if (newSize != -1) {
+            pendingFftSize = -1
+
+            val oldHandle = nativeHandle
+            nativeHandle = 0L
+
+            fftSize = newSize
+            sampleBuffer = FloatArray(fftSize)
+            bufferIndex = 0
+
+            computeBandEdges(currentSampleRate)
+
+            if (oldHandle != 0L) {
+                nativeDestroy(oldHandle)
+            }
+
+            val newHandle = nativeCreate(fftSize)
+            if (newHandle != 0L) {
+                nativeSetBandEdges(newHandle, bandEdges, BAND_COUNT)
+            }
+            nativeHandle = newHandle
         }
     }
 
@@ -231,6 +312,7 @@ class VisualizerProcessor : BaseAudioProcessor() {
             isAFront: AtomicBoolean,
             view: View
     ) {
+        clearPendingFrames()
         directOutput = DirectOutput(bufA, bufB, isAFront, WeakReference(view))
     }
 
@@ -243,6 +325,29 @@ class VisualizerProcessor : BaseAudioProcessor() {
      */
     fun clearDirectOutput() {
         directOutput = null
+        clearPendingFrames()
+    }
+
+    /**
+     * Discards all queued-but-not-yet-displayed frames. Call on seeks and pipeline flushes
+     * so stale spectrum data from before the discontinuity is never replayed.
+     */
+    fun clearPendingFrames() {
+        synchronized(frameLock) {
+            frameHead = 0
+            frameCount = 0
+            queuedNs = 0L
+        }
+    }
+
+    /**
+     * Freezes or resumes the replay of queued frames. While paused the display holds the
+     * last frame and the queue keeps its content, so the spectrum stays aligned with the
+     * audio that is still sitting in the sink's buffer when playback resumes.
+     */
+    fun setPlaybackPaused(paused: Boolean) {
+        isPlaybackPaused = paused
+        if (!paused) scheduleTick()
     }
 
     /**
@@ -300,7 +405,7 @@ class VisualizerProcessor : BaseAudioProcessor() {
             outputLatencySamples = computeDelaySamples(outputLatencyMs, inputAudioFormat.sampleRate)
 
             if (nativeHandle == 0L) {
-                nativeHandle = nativeCreate(FFT_SIZE)
+                nativeHandle = nativeCreate(fftSize)
             }
             if (nativeHandle != 0L) {
                 nativeSetBandEdges(nativeHandle, bandEdges, BAND_COUNT)
@@ -312,6 +417,7 @@ class VisualizerProcessor : BaseAudioProcessor() {
     }
 
     override fun queueInput(inputBuffer: ByteBuffer) {
+        checkPendingFftSize()
         val remaining = inputBuffer.remaining()
         if (remaining == 0) return
 
@@ -354,21 +460,18 @@ class VisualizerProcessor : BaseAudioProcessor() {
              */
             val mono = (leftSample + rightSample) / 2f
             val delaySamples = outputLatencySamples
-            val delayedMono: Float
 
-            if (delaySamples > 0) {
-                /**
-                 * Write the current mono sample at the write cursor, then read from the
-                 * position that is [delaySamples] frames behind the write cursor.
-                 * The bitmask replaces modulo to keep the loop branch-light.
-                 */
-                vizDelayBuf[vizDelayWritePos] = mono
-                val readPos = (vizDelayWritePos - delaySamples + kDelayBufSize) and kDelayBufMask
-                delayedMono = vizDelayBuf[readPos]
-                vizDelayWritePos = (vizDelayWritePos + 1) and kDelayBufMask
+            /**
+             * The ring is written unconditionally so the history is always valid when the
+             * user raises the latency offset from zero while a track is playing.
+             */
+            vizDelayBuf[vizDelayWritePos] = mono
+            val delayedMono = if (delaySamples > 0) {
+                vizDelayBuf[(vizDelayWritePos - delaySamples + kDelayBufSize) and kDelayBufMask]
             } else {
-                delayedMono = mono
+                mono
             }
+            vizDelayWritePos = (vizDelayWritePos + 1) and kDelayBufMask
 
             // Downmix stereo to mono for accurate frequency analysis.
             sampleBuffer[bufferIndex] = delayedMono
@@ -404,6 +507,8 @@ class VisualizerProcessor : BaseAudioProcessor() {
      * @param channelCount Number of audio channels per frame (1 = mono, 2 = stereo, etc.).
      */
     fun feedFloat(samples: FloatArray, sampleCount: Int, channelCount: Int) {
+        checkPendingFftSize()
+
         if (nativeHandle == 0L || sampleCount == 0 || channelCount == 0) return
         val frameCount = sampleCount / channelCount
 
@@ -419,16 +524,14 @@ class VisualizerProcessor : BaseAudioProcessor() {
             }
 
             val delaySamples = outputLatencySamples
-            val delayedMono: Float
 
-            if (delaySamples > 0) {
-                vizDelayBuf[vizDelayWritePos] = mono
-                val readPos = (vizDelayWritePos - delaySamples + kDelayBufSize) and kDelayBufMask
-                delayedMono = vizDelayBuf[readPos]
-                vizDelayWritePos = (vizDelayWritePos + 1) and kDelayBufMask
+            vizDelayBuf[vizDelayWritePos] = mono
+            val delayedMono = if (delaySamples > 0) {
+                vizDelayBuf[(vizDelayWritePos - delaySamples + kDelayBufSize) and kDelayBufMask]
             } else {
-                delayedMono = mono
+                mono
             }
+            vizDelayWritePos = (vizDelayWritePos + 1) and kDelayBufMask
 
             sampleBuffer[bufferIndex] = delayedMono
             bufferIndex++
@@ -465,11 +568,10 @@ class VisualizerProcessor : BaseAudioProcessor() {
      * output or the legacy listener, depending on which is connected.
      *
      * Direct path (zero allocations on audio thread):
-     *  1. Determine the back buffer from [DirectOutput.isAFront].
-     *  2. Call [nativeProcessInto] — C++ writes magnitudes in-place via
-     *     `GetFloatArrayElements` + `ReleaseFloatArrayElements` with mode 0.
-     *  3. Atomically flip [DirectOutput.isAFront] to promote back to front.
-     *  4. Call [View.postInvalidate] to schedule a UI redraw.
+     *  1. Call [nativeProcessInto] into [scratchBands].
+     *  2. Append the frame to the pacing queue and make sure the vsync consumer is running.
+     *  3. [onVsync] later releases frames at real-time pace into the view's back buffer,
+     *     flips [DirectOutput.isAFront] and invalidates the view.
      *
      * Legacy path (one [FloatArray] allocation per window):
      *  - Compute magnitudes into a fresh array and deliver via [VisualizerListener].
@@ -477,19 +579,87 @@ class VisualizerProcessor : BaseAudioProcessor() {
     private fun processAndEmit() {
         if (nativeHandle == 0L) return
 
-        val out = directOutput
-        if (out != null) {
-            // Direct path: write into back buffer, swap, trigger redraw.
-            val backBuf = if (out.isAFront.get()) out.bufB else out.bufA
-            nativeProcessInto(nativeHandle, sampleBuffer, backBuf, isVisualizerOptimized)
-            out.isAFront.set(!out.isAFront.get())
-            out.view.get()?.postInvalidate()
+        if (directOutput != null) {
+            nativeProcessInto(nativeHandle, sampleBuffer, scratchBands, isVisualizerOptimized)
+            enqueueFrame()
+            scheduleTick()
         } else {
             val l = listener ?: return
             // Legacy path: allocate one array per window (listener may hold the ref async).
             val bands = FloatArray(BAND_COUNT)
             nativeProcessInto(nativeHandle, sampleBuffer, bands, isVisualizerOptimized)
             l.onSpectrumDataCaptured(bands)
+        }
+    }
+
+    /** Appends [scratchBands] to the pacing queue, evicting the oldest frames when full or too far ahead. */
+    private fun enqueueFrame() {
+        val durationNs = fftSize * 1_000_000_000L / currentSampleRate.coerceAtLeast(1)
+        synchronized(frameLock) {
+            while (frameCount > 0 &&
+                    (frameCount >= FRAME_RING_CAPACITY || queuedNs + durationNs > MAX_QUEUED_NS)) {
+                queuedNs -= frameDurationsNs[frameHead]
+                frameHead = (frameHead + 1) % FRAME_RING_CAPACITY
+                frameCount--
+            }
+            val slot = (frameHead + frameCount) % FRAME_RING_CAPACITY
+            scratchBands.copyInto(frameRing[slot])
+            frameDurationsNs[slot] = durationNs
+            frameCount++
+            queuedNs += durationNs
+        }
+    }
+
+    private fun scheduleTick() {
+        if (tickScheduled.compareAndSet(false, true)) {
+            mainHandler.post(startTick)
+        }
+    }
+
+    private fun hasPendingFrames(): Boolean = synchronized(frameLock) { frameCount > 0 }
+
+    /**
+     * Runs on the main thread once per display frame while frames are queued. Releases as many
+     * queued frames as the elapsed real time covers and publishes only the newest of them,
+     * so the view receives a steady update stream regardless of how bursty the audio feed is.
+     */
+    private fun onVsync(frameTimeNanos: Long) {
+        val out = directOutput
+        if (out == null) {
+            tickScheduled.set(false)
+            return
+        }
+
+        val dt = if (lastTickNs == 0L) 0L else (frameTimeNanos - lastTickNs).coerceIn(0L, MAX_TICK_DELTA_NS)
+        lastTickNs = frameTimeNanos
+
+        var latest = -1
+        if (!isPlaybackPaused) {
+            paceBudgetNs += dt
+            synchronized(frameLock) {
+                while (frameCount > 0 && paceBudgetNs >= 0) {
+                    latest = frameHead
+                    paceBudgetNs -= frameDurationsNs[frameHead]
+                    queuedNs -= frameDurationsNs[frameHead]
+                    frameHead = (frameHead + 1) % FRAME_RING_CAPACITY
+                    frameCount--
+                }
+                if (latest >= 0) {
+                    val back = if (out.isAFront.get()) out.bufB else out.bufA
+                    frameRing[latest].copyInto(back)
+                    out.isAFront.set(!out.isAFront.get())
+                }
+                if (frameCount == 0 && paceBudgetNs > 0) paceBudgetNs = 0L
+            }
+            if (latest >= 0) out.view.get()?.invalidate()
+        }
+
+        if (!isPlaybackPaused && hasPendingFrames()) {
+            Choreographer.getInstance().postFrameCallback(frameCallback)
+        } else {
+            tickScheduled.set(false)
+            // A frame may have been queued between the check above and clearing the flag.
+            if (!isPlaybackPaused && hasPendingFrames()) scheduleTick()
         }
     }
 
@@ -585,5 +755,14 @@ class VisualizerProcessor : BaseAudioProcessor() {
         const val BAND_COUNT = 40
 
         private const val DEFAULT_SAMPLE_RATE = 44_100
+
+        /** Slots in the pacing queue; sized so even 256-point windows at 192 kHz fit within [MAX_QUEUED_NS]. */
+        private const val FRAME_RING_CAPACITY = 1024
+
+        /** Upper bound on how far ahead of the display the queue may run (covers the largest AudioTrack buffer). */
+        private const val MAX_QUEUED_NS = 1_000_000_000L
+
+        /** Clamp for a single vsync gap so a stalled UI doesn't release a huge burst at once. */
+        private const val MAX_TICK_DELTA_NS = 100_000_000L
     }
 }

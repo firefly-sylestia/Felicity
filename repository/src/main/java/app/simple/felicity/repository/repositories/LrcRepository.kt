@@ -8,6 +8,7 @@ import androidx.core.net.toUri
 import app.simple.felicity.repository.factories.TaggedSocketFactory
 import app.simple.felicity.repository.metadata.LyricsMetaHelper
 import app.simple.felicity.repository.models.LrcLibResponse
+import app.simple.felicity.repository.utils.LrcLibHttpException
 import app.simple.felicity.shared.constants.AppConstants
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
@@ -224,11 +225,12 @@ class LrcRepository @Inject constructor(
                 client.newCall(request).execute().use { response ->
                     if (!response.isSuccessful) {
                         return@withContext Result.failure(
-                                IOException("Failed to search: ${response.code}")
+                                LrcLibHttpException(response.code, "Failed to search: ${response.code}")
                         )
                     }
                     val listType = object : TypeToken<List<LrcLibResponse>>() {}.type
                     val results: List<LrcLibResponse> = gson.fromJson(response.body.string(), listType)
+                    results.forEach { it.processSyncState() }
                     return@withContext Result.success(results)
                 }
             } catch (e: Exception) {
@@ -264,7 +266,7 @@ class LrcRepository @Inject constructor(
                 client.newCall(request).execute().use { response ->
                     if (!response.isSuccessful) {
                         return@withContext Result.failure(
-                                IOException("Failed to search lyrics: ${response.code}")
+                                LrcLibHttpException(response.code, "Failed to search lyrics: ${response.code}")
                         )
                     }
 
@@ -272,6 +274,7 @@ class LrcRepository @Inject constructor(
 
                     val listType = object : TypeToken<List<LrcLibResponse>>() {}.type
                     val results: List<LrcLibResponse> = gson.fromJson(responseBody, listType)
+                    results.forEach { it.processSyncState() }
 
                     // Keep only entries that actually have synced lyrics — plain text is handled separately.
                     val filteredResults = results.filter { !it.syncedLyrics.isNullOrBlank() }
@@ -308,12 +311,13 @@ class LrcRepository @Inject constructor(
                 client.newCall(request).execute().use { response ->
                     if (!response.isSuccessful) {
                         return@withContext Result.failure(
-                                IOException("Failed to fetch lyrics: ${response.code}")
+                                LrcLibHttpException(response.code, "Failed to fetch lyrics: ${response.code}")
                         )
                     }
 
                     val responseBody = response.body.string()
                     val result: LrcLibResponse = gson.fromJson(responseBody, LrcLibResponse::class.java)
+                    result.processSyncState()
                     return@withContext Result.success(result)
                 }
             } catch (e: Exception) {

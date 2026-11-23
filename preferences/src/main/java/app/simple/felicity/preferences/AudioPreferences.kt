@@ -2,9 +2,6 @@ package app.simple.felicity.preferences
 
 import androidx.core.content.edit
 import app.simple.felicity.manager.SharedPreferences
-import app.simple.felicity.preferences.AudioPreferences.SINK_AAUDIO
-import app.simple.felicity.preferences.AudioPreferences.SINK_AUDIO_TRACK
-import app.simple.felicity.preferences.AudioPreferences.SINK_OBOE
 
 object AudioPreferences {
 
@@ -12,6 +9,9 @@ object AudioPreferences {
     const val GAPLESS_PLAYBACK = "gapless_playback"
     const val HIRES_OUTPUT = "hires_output"
     const val SKIP_SILENCE = "skip_silence"
+    const val CROSSFADE_DURATION = "crossfade_duration"
+    const val CROSSFADE_ENABLED = "crossfade_enabled"
+    const val CROSSFADE_MANUAL_SKIP = "crossfade_manual_skip"
     const val IS_STEREO_DOWNMIX_FORCED = "is_stereo_downmix_forced"
     const val IS_USB_DAC = "is_usb_dac1"
 
@@ -22,6 +22,10 @@ object AudioPreferences {
     const val OUTPUT_SINK = "output_sink"
 
     private const val FALLBACK_TO_SW_DECODER = "fallback_to_sw_decoder"
+
+    const val FFT_RESOLUTION = "fft_resolution"
+
+    // --------------------------------------------------------------------------------------------- //
 
     const val LOCAL_DECODER = 0
     const val FFMPEG = 1
@@ -41,6 +45,17 @@ object AudioPreferences {
      */
     const val SINK_OBOE = 2
 
+    const val FFT_RESOLUTION_VERY_LOW = 256
+    const val FFT_RESOLUTION_LOW = 512
+    const val FFT_RESOLUTION_NORMAL = 1024
+    const val FFT_RESOLUTION_HIGH = 2048
+    const val FFT_RESOLUTION_ULTRA = 4096
+
+    /**
+     * Default crossfade duration in milliseconds.
+     */
+    const val DEFAULT_CROSSFADE_DURATION = 3000L
+
     // --------------------------------------------------------------------------------------------- //
 
     fun setAudioDecoder(decoder: Int) {
@@ -59,6 +74,35 @@ object AudioPreferences {
 
     fun isGaplessPlaybackEnabled(): Boolean {
         return SharedPreferences.getSharedPreferences().getBoolean(GAPLESS_PLAYBACK, true)
+    }
+
+    // --------------------------------------------------------------------------------------------- //
+
+    fun setCrossfadeDuration(durationMs: Long) {
+        SharedPreferences.getSharedPreferences().edit {
+            putLong(CROSSFADE_DURATION, durationMs)
+        }
+    }
+
+    fun getCrossfadeDuration(): Long {
+        return SharedPreferences.getSharedPreferences()
+            .getLong(CROSSFADE_DURATION, DEFAULT_CROSSFADE_DURATION)
+    }
+
+    fun setCrossfadeEnabled(enabled: Boolean) {
+        SharedPreferences.getSharedPreferences().edit { putBoolean(CROSSFADE_ENABLED, enabled) }
+    }
+
+    fun isCrossfadeEnabled(): Boolean {
+        return SharedPreferences.getSharedPreferences().getBoolean(CROSSFADE_ENABLED, true)
+    }
+
+    fun setCrossfadeManualSkip(enabled: Boolean) {
+        SharedPreferences.getSharedPreferences().edit { putBoolean(CROSSFADE_MANUAL_SKIP, enabled) }
+    }
+
+    fun isCrossfadeManualSkipEnabled(): Boolean {
+        return SharedPreferences.getSharedPreferences().getBoolean(CROSSFADE_MANUAL_SKIP, true)
     }
 
     // --------------------------------------------------------------------------------------------- //
@@ -123,6 +167,16 @@ object AudioPreferences {
 
     /** Convenience check — true when the user chose the Oboe output path. */
     fun isOboeEnabled(): Boolean = getOutputSink() == SINK_OBOE
+
+    // --------------------------------------------------------------------------------------------- //
+
+    fun setFftResolution(resolution: Int) {
+        SharedPreferences.getSharedPreferences().edit { putInt(FFT_RESOLUTION, resolution) }
+    }
+
+    fun getFftResolution(): Int {
+        return SharedPreferences.getSharedPreferences().getInt(FFT_RESOLUTION, FFT_RESOLUTION_NORMAL)
+    }
 
     fun shouldShowProcessors(): Boolean {
         return isHiresOutputEnabled().not()

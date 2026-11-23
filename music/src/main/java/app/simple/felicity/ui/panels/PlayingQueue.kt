@@ -17,7 +17,7 @@ import app.simple.felicity.decorations.views.PopupMenuItem
 import app.simple.felicity.decorations.views.SharedScrollViewPopup
 import app.simple.felicity.dialogs.app.TotalTime.Companion.showTotalTime
 import app.simple.felicity.dialogs.playlists.AddMultipleToPlaylistDialog.Companion.showAddMultipleToPlaylistDialog
-import app.simple.felicity.dialogs.queue.QueueLabel
+import app.simple.felicity.dialogs.queue.QueueLabel.Companion.QueueLabelCallbacks
 import app.simple.felicity.dialogs.queue.QueueLabel.Companion.openQueueLabel
 import app.simple.felicity.engine.managers.MediaPlaybackManager
 import app.simple.felicity.engine.managers.PlaybackStateManager
@@ -122,7 +122,7 @@ class PlayingQueue : BasePanelFragment() {
             val activeQueueId = MediaPlaybackManager.getActiveQueueId()
             childFragmentManager.openQueueLabel(QueueLabelPreferences.getDisplayLabel(activeQueueId) { n ->
                 getString(R.string.current_queue, n)
-            }).setOnQueueLabelChangedListener(object : QueueLabel.Companion.QueueLabelCallbacks {
+            }).setOnQueueLabelChangedListener(object : QueueLabelCallbacks {
                 override fun onQueueLabelChanged(label: String) {
                     QueueLabelPreferences.setLabel(activeQueueId, label)
                     updateQueueHeaderLabel()
@@ -163,7 +163,6 @@ class PlayingQueue : BasePanelFragment() {
     private fun updateQueueList(songs: List<Audio>) {
         if (adapterPlayingQueue == null) {
             adapterPlayingQueue = AdapterPlayingQueue(songs)
-            adapterPlayingQueue?.setHasStableIds(true)
 
             adapterPlayingQueue?.setGeneralAdapterCallbacks(object : GeneralAdapterCallbacks {
                 override fun onSongClicked(songs: MutableList<Audio>, position: Int, view: View) {

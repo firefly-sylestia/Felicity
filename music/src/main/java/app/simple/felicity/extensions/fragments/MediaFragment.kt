@@ -65,6 +65,8 @@ import app.simple.felicity.repository.models.AudioBookmark
 import app.simple.felicity.repository.models.PlaylistWithSongs
 import app.simple.felicity.repository.repositories.LrcRepository
 import app.simple.felicity.repository.shuffle.Shuffle.smartShuffle
+import app.simple.felicity.repository.sort.PageSort.sortedForAlbumPage
+import app.simple.felicity.repository.sort.PageSort.sortedForArtistPage
 import app.simple.felicity.repository.utils.AudioUtils.getProperAlbum
 import app.simple.felicity.repository.utils.AudioUtils.getProperArtists
 import app.simple.felicity.repository.utils.AudioUtils.getProperTitle
@@ -86,6 +88,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.math.abs
+import kotlin.time.Duration.Companion.milliseconds
 
 open class MediaFragment : KeyboardScopedFragment(), MiniPlayerPolicy {
 
@@ -254,8 +257,20 @@ open class MediaFragment : KeyboardScopedFragment(), MiniPlayerPolicy {
                                 createSongHistoryDatabase(songs)
                                 showMiniPlayer()
                             },
+                            insertAndPlay = {
+                                MediaPlaybackManager.insertAndPlay(songs[position])
+                                showMiniPlayer()
+                            },
                             onMoveToEmptyQueue = {
                                 moveToEmptyQueueAndPlay(songs, position)
+                            },
+                            onPlayNext = {
+                                MediaPlaybackManager.playNext(songs[position])
+                                showMiniPlayer()
+                            },
+                            onAddToQueue = {
+                                MediaPlaybackManager.addToQueue(songs[position])
+                                showMiniPlayer()
                             }
                     )
                     return
@@ -286,7 +301,13 @@ open class MediaFragment : KeyboardScopedFragment(), MiniPlayerPolicy {
      * @param onMoveToEmptyQueue Invoked when the user chooses to preserve the current queue and
      *                           play the new selection from an empty queue slot instead.
      */
-    private fun confirmQueueReplacement(onReplace: () -> Unit, onMoveToEmptyQueue: () -> Unit) {
+    private fun confirmQueueReplacement(
+            onReplace: () -> Unit,
+            onMoveToEmptyQueue: () -> Unit,
+            onPlayNext: () -> Unit,
+            onAddToQueue: () -> Unit,
+            insertAndPlay: () -> Unit
+    ) {
         SimpleDialog.Builder(
                 container = requireContainerView(),
                 inflateBinding = DialogQueueReplaceConfirmationBinding::inflate)
@@ -301,6 +322,21 @@ open class MediaFragment : KeyboardScopedFragment(), MiniPlayerPolicy {
 
                 binding.replace.setOnClickListener {
                     onReplace()
+                    dismiss()
+                }
+
+                binding.playNext.setOnClickListener {
+                    onPlayNext()
+                    dismiss()
+                }
+
+                binding.addToQueue.setOnClickListener {
+                    onAddToQueue()
+                    dismiss()
+                }
+
+                binding.insertAndPlay.setOnClickListener {
+                    insertAndPlay()
                     dismiss()
                 }
             }
@@ -454,7 +490,7 @@ open class MediaFragment : KeyboardScopedFragment(), MiniPlayerPolicy {
         // show mini player briefly then hide it again
         showMiniPlayer()
         viewLifecycleOwner.lifecycleScope.launch {
-            delay(2000) // Show for 2 seconds
+            delay(2000.milliseconds) // Show for 2 seconds
 
             if (wantsMiniPlayerVisible.not()) {
                 hideMiniPlayer()
@@ -837,6 +873,8 @@ open class MediaFragment : KeyboardScopedFragment(), MiniPlayerPolicy {
                     MediaPlaybackManager.duck()
                 }
 
+                binding.deleteLyricsCheckbox.isChecked = true // By default, delete lyrics files too
+
                 val title = audio.getProperTitle()
                 val fullText = getString(R.string.delete_audio_summary, title)
 
@@ -1160,7 +1198,7 @@ open class MediaFragment : KeyboardScopedFragment(), MiniPlayerPolicy {
 
             binding.addAllToQueue.setOnClickListener {
                 viewLifecycleOwner.lifecycleScope.launch {
-                    val songs = fetchAudiosByPaths(album.songPaths)
+                    val songs = fetchAudiosByPaths(album.songPaths).sortedForAlbumPage()
                     songs.forEach { MediaPlaybackManager.addToQueue(it) }
                 }
                 dismiss()
@@ -1256,7 +1294,7 @@ open class MediaFragment : KeyboardScopedFragment(), MiniPlayerPolicy {
 
             binding.addAllToQueue.setOnClickListener {
                 viewLifecycleOwner.lifecycleScope.launch {
-                    val songs = fetchAudiosByPaths(artist.songPaths)
+                    val songs = fetchAudiosByPaths(artist.songPaths).sortedForArtistPage()
                     songs.forEach { MediaPlaybackManager.addToQueue(it) }
                 }
                 dismiss()

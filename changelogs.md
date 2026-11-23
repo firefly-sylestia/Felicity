@@ -1,31 +1,30 @@
+#### Equalizer
+
+- Added dedicated **AutoEQ Headphone Profiles** section in the **EQ Presets** panel.
+- Supports both **10-Band** and **PEQ** AutoEQ headphones profiles.
+  - 31-Band will be added soon.
+- Fixed various DSP issues while working with the PEQ profiles in the app.
+
 #### User Interface
 
-- Added two waveforms styles in the **Player Screens**.
-    - A scrolling mode waveform that scrolls from right to left as the song plays.
-    - A static waveform that shows the entire waveform of the song and highlights the current
-      playback position.
-- Added **Reduce Animations** toggle in the **Accessibility Preferences** panel.
+- Added option to volume knob gravity. #176
+- Added **Weather Effect** for the whole app.
+  - Experience soothing weather simulation in the app while your music is playing, currently supports **Autumn**, **Summer**, and **Winter**.
+- Added band input dialog to manually enter values for **EQ Bands**. #169
+- Added **Weather** chip in the **Dashboard**.
 
 #### Bug Fixes
 
-- Fixed some waveform optics deformity issues.
-- Fixed _ForegroundServiceDidNotStartInTimeException_ crash in the player service.
-- Fixed non-monotonic behavior of the waveform causing the waveform to jump back and forth while the
-  song is playing.
-- Fixed inconsistent global favorite button state in the **Player Screens** when the song is added
-  or removed from favorites.
-- Fixed various issues with scanner progress notification.
-- Fixed extra divider in song menu when the song has no metadata.
-- Fixed scroll view padding state loss in **Dashboard** causing the miniplayer to overlap the
-  content.
+- Fixed album art squeezing in the **Mini Player**. #173
+- Fixed swipe down gestures not working over album art region in the player panels. #174
+- Added **Dynamic Immersive Mode** for player panels.
+  - Hide some UI elements dynamically to create immersiveness dynamically.
+  - Can be toggled from **User Interface** preferences.
 
 #### Improvements
 
-- Tapping artist and album names in the **Player Screens** now opens the corresponding artist and
-  album pages.
+- Improved **Lyrics Search** panel to show lyrics best matches and lyrics previews in the results.
 
-#### Changes
+#### Removed
 
-- Changed some button groups preferences to popup menus in **Behavior Preferences** panel to avoid
-  localized text overflowing the layout boundary.
-- Apply waveform preferences to the waveform in **Lyrics** panel.
+- Removed **Import PEQ Preset** button from **Equalizer**.

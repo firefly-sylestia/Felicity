@@ -15,17 +15,20 @@ import app.simple.felicity.adapters.home.dashboard.AdapterDashboardAlbums
 import app.simple.felicity.adapters.home.dashboard.AdapterDashboardAlbums.Companion.AdapterDashboardAlbumsCallbacks
 import app.simple.felicity.adapters.home.dashboard.AdapterDashboardArtists
 import app.simple.felicity.adapters.home.dashboard.AdapterDashboardArtists.Companion.AdapterDashboardArtistsCallbacks
+import app.simple.felicity.adapters.home.dashboard.AdapterDashboardMixes
+import app.simple.felicity.adapters.home.dashboard.AdapterDashboardMixes.Companion.AdapterDashboardMixesCallbacks
 import app.simple.felicity.adapters.home.dashboard.AdapterDashboardPanels
 import app.simple.felicity.adapters.home.dashboard.AdapterDashboardPanels.Companion.AdapterDashboardPanelsCallbacks
 import app.simple.felicity.adapters.home.dashboard.AdapterDashboardSongs
 import app.simple.felicity.adapters.home.dashboard.AdapterDashboardSongs.Companion.AdapterDashboardSongsCallbacks
-import app.simple.felicity.adapters.home.dashboard.AdapterRecommended
-import app.simple.felicity.adapters.home.dashboard.AdapterRecommended.Companion.AdapterRecommendedCallbacks
 import app.simple.felicity.databinding.FragmentHomeDashboardBinding
 import app.simple.felicity.decorations.itemdecorations.LinearHorizontalSpacingDecoration
-import app.simple.felicity.decorations.layoutmanager.spanned.SpanSize
-import app.simple.felicity.decorations.layoutmanager.spanned.SpannedGridLayoutManager
+import app.simple.felicity.decorations.utils.TextViewUtils.setStartDrawable
+import app.simple.felicity.decorations.views.PopupMenuItem
+import app.simple.felicity.decorations.views.SharedScrollViewPopup
 import app.simple.felicity.dialogs.app.AppLabel.Companion.showAppLabel
+import app.simple.felicity.dialogs.player.SleepTimerDialog.Companion.openSleepTimerDialog
+import app.simple.felicity.engine.managers.MediaPlaybackManager
 import app.simple.felicity.extensions.fragments.BaseHomeFragment
 import app.simple.felicity.preferences.MainPreferences
 import app.simple.felicity.preferences.QueueLabelPreferences
@@ -39,18 +42,22 @@ import app.simple.felicity.shared.utils.ViewUtils.visible
 import app.simple.felicity.shared.utils.WindowUtil.applyLandscapeNavBarPadding
 import app.simple.felicity.ui.pages.AlbumPage
 import app.simple.felicity.ui.pages.ArtistPage
+import app.simple.felicity.ui.panels.MixPanel
 import app.simple.felicity.ui.panels.PlayingQueue
 import app.simple.felicity.viewmodels.panels.DashboardViewModel
 import app.simple.felicity.viewmodels.panels.DashboardViewModel.LibraryStats
-import app.simple.felicity.viewmodels.panels.DashboardViewModel.RecommendedSpanConfig
+import app.simple.felicity.viewmodels.panels.MixesViewModel
+import app.simple.felicity.viewmodels.panels.MixesViewModel.Mix
 import app.simple.felicity.viewmodels.panels.SimpleHomeViewModel.Companion.Panel
 import com.google.android.flexbox.AlignItems
 import com.google.android.flexbox.FlexDirection
 import com.google.android.flexbox.FlexboxLayoutManager
 import com.google.android.flexbox.JustifyContent
 import dagger.hilt.android.AndroidEntryPoint
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import java.text.NumberFormat
+import java.util.Calendar
 
 /**
  * Dashboard home screen fragment.
@@ -62,6 +69,9 @@ import java.text.NumberFormat
  *  - A spanned art grid of recommended songs loaded once per app session. The user can
  *    request a new random selection at any time via the shuffle button next to the section title.
  *    Portrait uses a 3-column spanned layout; landscape uses a flat 5-column grid.
+ *  - A "Mixed" carousel with two auto-generated playlists, Discover (never played songs) and
+ *    Random Picks, drawn as stacks of covers. Each opens its own panel and the refresh button
+ *    generates new mixes.
  *  - A horizontal carousel of recently played songs.
  *  - A horizontal carousel of top artists ranked by play count.
  *  - A horizontal carousel of top albums ranked by play count.
@@ -81,12 +91,14 @@ class Dashboard : BaseHomeFragment() {
     private lateinit var binding: FragmentHomeDashboardBinding
 
     private val dashboardViewModel: DashboardViewModel by viewModels()
+    private val mixesViewModel: MixesViewModel by viewModels({ requireActivity() })
 
     private var recentlyPlayedAdapter: AdapterDashboardSongs? = null
     private var recentlyAddedAdapter: AdapterDashboardSongs? = null
     private var favoritesAdapter: AdapterDashboardSongs? = null
     private var topArtistsAdapter: AdapterDashboardArtists? = null
     private var topAlbumsAdapter: AdapterDashboardAlbums? = null
+    private var mixesAdapter: AdapterDashboardMixes? = null
 
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View {
         binding = FragmentHomeDashboardBinding.inflate(inflater, container, false)
@@ -107,6 +119,7 @@ class Dashboard : BaseHomeFragment() {
         setupHeader()
         setupCarouselSpacing()
         observeData()
+        setWeatherChipState()
 
         binding.scrollView.requireAttachedMiniPlayer()
 
@@ -114,8 +127,12 @@ class Dashboard : BaseHomeFragment() {
             openPreferencesPanel()
         }
 
-        binding.refreshRecommended.setOnClickListener {
-            dashboardViewModel.refreshRecommended()
+        binding.refreshMixes.setOnClickListener {
+            mixesViewModel.refresh()
+        }
+
+        binding.sleepTimer.setOnClickListener {
+            childFragmentManager.openSleepTimerDialog()
         }
 
         // Insets
@@ -136,6 +153,32 @@ class Dashboard : BaseHomeFragment() {
                 ServerModeService.isRunning.collect { running ->
                     if (running) binding.serverActiveChip.visible(true)
                     else binding.serverActiveChip.gone()
+                }
+            }
+        }
+
+        viewLifecycleOwner.lifecycleScope.launch {
+            viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
+                MediaPlaybackManager.sleepTimerStateFlow.collectLatest { running ->
+                    if (running) {
+                        binding.sleepTimer.visible(true)
+                    } else {
+                        binding.sleepTimer.gone()
+                    }
+                }
+            }
+        }
+
+        viewLifecycleOwner.lifecycleScope.launch {
+            viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
+                MediaPlaybackManager.sleepTimerRemainingFlow.collectLatest { remaining ->
+                    if (MediaPlaybackManager.isSleepTimerRunning()) {
+                        binding.sleepTimer.text = remaining.formatted
+                    } else if (MediaPlaybackManager.pauseAfterCurrentSong) {
+                        binding.sleepTimer.text = getString(R.string.till_this_song)
+                    } else {
+                        binding.sleepTimer.text = ""
+                    }
                 }
             }
         }
@@ -177,129 +220,16 @@ class Dashboard : BaseHomeFragment() {
         binding.favoritesList.addItemDecoration(LinearHorizontalSpacingDecoration(spacing))
         binding.topArtistsList.addItemDecoration(LinearHorizontalSpacingDecoration(spacing))
         binding.topAlbumsList.addItemDecoration(LinearHorizontalSpacingDecoration(spacing))
-    }
-
-    /**
-     * Configures the recommended spanned art grid using a [RecommendedSpanConfig] from
-     * the ViewModel. Portrait uses 3 columns with two large 2x2 cells; landscape uses
-     * 5 flat columns so the grid doesn't take up the entire screen height.
-     *
-     * The grid is fully replaced on every call so each ViewModel-driven cycle shows a fresh
-     * selection with a new random layout pattern.
-     *
-     * @param data The fresh list of [Audio] items emitted by [DashboardViewModel.recommended].
-     */
-    private fun setupRecommendedGrid(data: List<Audio>) {
-        val spanConfig = dashboardViewModel.getSpanConfigForOrientation(resources.configuration.orientation)
-
-        val layoutManager = SpannedGridLayoutManager(SpannedGridLayoutManager.Orientation.VERTICAL, spanConfig.spanCount)
-        layoutManager.spanSizeLookup = SpannedGridLayoutManager.SpanSizeLookup { position ->
-            if (position in spanConfig.bigCellPositions) SpanSize(2, 2) else SpanSize(1, 1)
-        }
-
-        // Set initial/cached height
-        binding.recommendedGrid.layoutParams.height = dashboardViewModel.recommendedHeight.takeIf { it != -1 } ?: 0
-
-        // Extract height measurement into a reusable lambda
-        val calculateAndSetHeight = {
-            binding.recommendedGrid.post {
-                try {
-                    val totalHeight = layoutManager.getTotalHeight() +
-                            binding.recommendedGrid.paddingTop +
-                            binding.recommendedGrid.paddingBottom
-
-                    if (dashboardViewModel.recommendedHeight != totalHeight) {
-                        binding.recommendedGrid.layoutParams.height = totalHeight
-                        binding.recommendedGrid.requestLayout()
-
-                        // Cache totalHeight directly to avoid `measuredHeight` race condition
-                        dashboardViewModel.recommendedHeight = totalHeight
-                    }
-                } catch (_: UninitializedPropertyAccessException) {
-                    // View was destroyed before the post ran — no worries, nothing to update.
-                }
-            }
-        }
-
-        val applyUpdate = {
-            applyRecommendedAdapter(data, layoutManager)
-            calculateAndSetHeight()
-        }
-
-        // We only animate if there's an existing adapter AND the argument is true
-        val shouldAnimate = binding.recommendedGrid.adapter != null &&
-                requireArguments().getBoolean(SHOULD_ANIMATE, true)
-
-        if (shouldAnimate) {
-            binding.recommendedGrid.animate()
-                .alpha(0f)
-                .scaleX(0.9f)
-                .scaleY(0.9f)
-                .setDuration(300)
-                .withEndAction {
-                    applyUpdate() // Called after fade out
-
-                    binding.recommendedGrid.animate()
-                        .alpha(1f)
-                        .scaleX(1f)
-                        .scaleY(1f)
-                        .setDuration(300)
-                        .start()
-                }.start()
-        } else {
-            applyUpdate() // Called immediately for first load or if animations are disabled
-        }
-
-        // Note: Double check if this is meant to be unconditionally false.
-        // Hiding a view completely (GONE) can sometimes force its measured height to 0
-        // depending on the parent ViewGroup.
-        binding.recommendedSection.visible(false)
-    }
-
-    /**
-     * Swaps in a fresh [AdapterRecommended] and attaches callbacks.
-     * Extracted to avoid duplicating the adapter setup code for both the
-     * first-time and animation-end code paths.
-     *
-     * @param data          The recommended [Audio] items to show.
-     * @param layoutManager The freshly-built [SpannedGridLayoutManager] to attach.
-     */
-    private fun applyRecommendedAdapter(data: List<Audio>, layoutManager: SpannedGridLayoutManager) {
-        // Create and configure the adapter
-        val recommendedAdapter = AdapterRecommended(data).apply {
-            setCallbacks(object : AdapterRecommendedCallbacks {
-                override fun onItemClicked(items: List<Audio>, position: Int) =
-                    setMediaItems(items, position)
-
-                override fun onItemLongClicked(items: List<Audio>, position: Int, imageView: ImageView) =
-                    openSongsMenu(items, position, imageView)
-            })
-        }
-
-        binding.recommendedGrid.apply {
-            adapter = null
-            this.layoutManager = layoutManager
-            setHasFixedSize(false)
-
-            if (requireArguments().getBoolean(SHOULD_ANIMATE, true)) {
-                scheduleLayoutAnimation()
-                requireArguments().putBoolean(SHOULD_ANIMATE, false)
-            } else {
-                layoutAnimation = null
-            }
-
-            // Assign the adapter once at the end
-            adapter = recommendedAdapter
-        }
+        binding.mixedList.addItemDecoration(LinearHorizontalSpacingDecoration(spacing))
     }
 
     private fun observeData() {
         viewLifecycleOwner.lifecycleScope.launch {
             viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
+
                 launch {
-                    dashboardViewModel.recommended.collect { data ->
-                        if (data != null) setupRecommendedGrid(data)
-                        else binding.recommendedSection.gone()
+                    mixesViewModel.mixes.collect { mixes ->
+                        updateMixes(mixes)
                     }
                 }
                 launch {
@@ -336,6 +266,95 @@ class Dashboard : BaseHomeFragment() {
         }
     }
 
+    private fun setWeatherChipState() {
+        fun updateChipLabel(mode: Int) {
+            when (mode) {
+                UserInterfacePreferences.WEATHER_EFFECT_OFF -> {
+                    binding.weather.text = getString(R.string.off)
+                    binding.weather.setStartDrawable(R.drawable.ic_cloud_off_16dp)
+                }
+                UserInterfacePreferences.WEATHER_EFFECT_WINTER -> {
+                    binding.weather.text = getString(R.string.winter)
+                    binding.weather.setStartDrawable(R.drawable.ic_cloud_16dp)
+                }
+                UserInterfacePreferences.WEATHER_EFFECT_AUTUMN -> {
+                    binding.weather.text = getString(R.string.autumn)
+                    binding.weather.setStartDrawable(R.drawable.ic_cloud_16dp)
+                }
+                UserInterfacePreferences.WEATHER_EFFECT_SUMMER -> {
+                    binding.weather.text = getString(R.string.summer)
+                    binding.weather.setStartDrawable(R.drawable.ic_cloud_16dp)
+                }
+                else -> {
+                    // Auto
+                    val month = Calendar.getInstance().get(Calendar.MONTH)
+                    when (month) {
+                        Calendar.DECEMBER, Calendar.JANUARY, Calendar.FEBRUARY -> {
+                            updateChipLabel(UserInterfacePreferences.WEATHER_EFFECT_WINTER)
+                        }
+                        Calendar.SEPTEMBER, Calendar.OCTOBER, Calendar.NOVEMBER -> {
+                            updateChipLabel(UserInterfacePreferences.WEATHER_EFFECT_AUTUMN)
+                        }
+                        Calendar.MAY, Calendar.JUNE, Calendar.JULY, Calendar.AUGUST -> {
+                            binding.weather.text = getString(R.string.summer)
+                            updateChipLabel(UserInterfacePreferences.WEATHER_EFFECT_SUMMER)
+                        }
+                        else -> {
+                            binding.weather.text = getString(R.string.off)
+                            updateChipLabel(UserInterfacePreferences.WEATHER_EFFECT_OFF)
+                        }
+                    }
+                }
+            }
+        }
+
+        binding.weather.setOnClickListener {
+            hideMiniPlayer()
+
+            SharedScrollViewPopup(
+                    container = requireContainerView(),
+                    anchorView = binding.weather,
+                    menuItems = listOf(
+                            PopupMenuItem(title = R.string.off),
+                            PopupMenuItem(title = R.string.auto),
+                            PopupMenuItem(title = R.string.winter),
+                            PopupMenuItem(title = R.string.autumn),
+                            PopupMenuItem(title = R.string.summer)
+                    ),
+                    onMenuItemClick = {
+                        when (it) {
+                            R.string.off -> {
+                                UserInterfacePreferences.setWeatherEffect(UserInterfacePreferences.WEATHER_EFFECT_OFF)
+                                updateChipLabel(UserInterfacePreferences.WEATHER_EFFECT_OFF)
+                            }
+                            R.string.auto -> {
+                                UserInterfacePreferences.setWeatherEffect(UserInterfacePreferences.WEATHER_EFFECT_AUTO)
+                                updateChipLabel(UserInterfacePreferences.WEATHER_EFFECT_AUTO)
+                            }
+                            R.string.winter -> {
+                                UserInterfacePreferences.setWeatherEffect(UserInterfacePreferences.WEATHER_EFFECT_WINTER)
+                                updateChipLabel(UserInterfacePreferences.WEATHER_EFFECT_WINTER)
+                            }
+                            R.string.autumn -> {
+                                UserInterfacePreferences.setWeatherEffect(UserInterfacePreferences.WEATHER_EFFECT_AUTUMN)
+                                updateChipLabel(UserInterfacePreferences.WEATHER_EFFECT_AUTUMN)
+                            }
+                            R.string.summer -> {
+                                UserInterfacePreferences.setWeatherEffect(UserInterfacePreferences.WEATHER_EFFECT_SUMMER)
+                                updateChipLabel(UserInterfacePreferences.WEATHER_EFFECT_SUMMER)
+                            }
+                        }
+
+                    },
+                    onDismiss = {
+                        showMiniPlayer()
+                    }
+            ).show()
+        }
+
+        updateChipLabel(UserInterfacePreferences.getWeatherEffect())
+    }
+
     /**
      * Updates the library stats chip with a nicely formatted "12,403 Tracks • 840 Hours" string.
      * Uses [NumberFormat] so large numbers get the commas they deserve.
@@ -350,6 +369,31 @@ class Dashboard : BaseHomeFragment() {
                 formatter.format(stats.trackCount),
                 formatter.format(stats.totalHours)
         )
+    }
+
+    /**
+     * Shows or hides the "Mixed" row and keeps its Discover / Random Picks cards in sync.
+     * Tapping a card opens the panel of that mix.
+     *
+     * @param mixes The latest list of [Mix] items from the ViewModel.
+     */
+    private fun updateMixes(mixes: List<Mix>) {
+        if (mixes.isEmpty()) {
+            binding.mixedSection.gone()
+            return
+        }
+        binding.mixedSection.visible(false)
+        if (mixesAdapter == null) {
+            mixesAdapter = AdapterDashboardMixes(mixes)
+            mixesAdapter!!.setCallbacks(object : AdapterDashboardMixesCallbacks {
+                override fun onMixClicked(mix: Mix) {
+                    openFragment(MixPanel.newInstance(mix.type), "${MixPanel.TAG}_${mix.type.name}")
+                }
+            })
+            binding.mixedList.adapter = mixesAdapter
+        } else {
+            mixesAdapter!!.updateData(mixes)
+        }
     }
 
     private fun updateRecentlyPlayed(songs: List<Audio>) {
@@ -485,6 +529,7 @@ class Dashboard : BaseHomeFragment() {
         favoritesAdapter = null
         topArtistsAdapter = null
         topAlbumsAdapter = null
+        mixesAdapter = null
         super.onDestroyView()
     }
 
@@ -546,7 +591,5 @@ class Dashboard : BaseHomeFragment() {
 
         /** Back-stack tag used when navigating to this fragment. */
         const val TAG = "Dashboard"
-
-        private const val SHOULD_ANIMATE = "should_animate"
     }
 }

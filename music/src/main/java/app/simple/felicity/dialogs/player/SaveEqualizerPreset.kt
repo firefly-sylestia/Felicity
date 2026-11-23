@@ -8,12 +8,15 @@ import androidx.fragment.app.FragmentManager
 import app.simple.felicity.databinding.DialogSaveEqualizerPresetBinding
 import app.simple.felicity.engine.managers.EqualizerManager
 import app.simple.felicity.extensions.dialogs.ScopedBottomSheetFragment
+import app.simple.felicity.preferences.EqualizerPreferences
+import app.simple.felicity.repository.models.EqualizerPreset
+import app.simple.felicity.shared.utils.ViewUtils.shakeView
 
 /**
  * A compact bottom-sheet dialog that lets the user type a name for their current
  * EQ settings and save them as a new preset.
  *
- * A [app.simple.felicity.decorations.views.EqualizerWaveView] previews the current band
+ * A [app.simple.felicity.decorations.equalizer.EqualizerWaveView] previews the current band
  * gains in real time so the user can confirm they are saving the right curve before
  * committing — because nobody wants to save "My Preset" and discover later it is just flat.
  *
@@ -25,19 +28,16 @@ import app.simple.felicity.extensions.dialogs.ScopedBottomSheetFragment
  */
 class SaveEqualizerPreset : ScopedBottomSheetFragment() {
 
-    private var binding: DialogSaveEqualizerPresetBinding? = null
+    private lateinit var binding: DialogSaveEqualizerPresetBinding
 
-    /** Callback invoked with the trimmed preset name when the user confirms the save. */
-    var onSave: ((String) -> Unit)? = null
+    /** Callback invoked with the trimmed preset name and category when the user confirms the save. */
+    var onSave: ((String, String) -> Unit)? = null
 
-    override fun onCreateView(
-            inflater: LayoutInflater,
-            container: ViewGroup?,
-            savedInstanceState: Bundle?
-    ): View {
-        return DialogSaveEqualizerPresetBinding.inflate(inflater, container, false).also {
-            binding = it
-        }.root
+    private var currentCategory = EqualizerPreset.CATEGORY_SAVED_PRESETS
+
+    override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View {
+        binding = DialogSaveEqualizerPresetBinding.inflate(inflater, container, false)
+        return binding.root
     }
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
@@ -45,40 +45,47 @@ class SaveEqualizerPreset : ScopedBottomSheetFragment() {
 
         // Show the current EQ curve in the little wave preview so the user knows exactly
         // what they're about to save. If this is flat, maybe they should tweak a bit first!
-        binding?.presetWavePreview?.setGains(EqualizerManager.getAllGains())
+        if (EqualizerPreferences.isParametricEqMode()) {
+            binding.presetWavePreview.setPeqBands(EqualizerManager.getPeqBands())
+        } else {
+            binding.presetWavePreview.setGains(EqualizerManager.getAllGains())
+        }
 
         // Focus the text field immediately so the keyboard pops up right away —
         // no need to tap the input field first.
-        binding?.presetNameInput?.requestFocus()
+        binding.presetNameInput.requestFocus()
 
-        binding?.cancel?.setOnClickListener {
+        updateCategoryUi()
+
+        binding.categorySavedPresets.setOnClickListener {
+            currentCategory = EqualizerPreset.CATEGORY_SAVED_PRESETS
+            updateCategoryUi()
+        }
+
+        binding.categoryHeadphoneProfiles.setOnClickListener {
+            currentCategory = EqualizerPreset.CATEGORY_HEADPHONE_PROFILES
+            updateCategoryUi()
+        }
+
+        binding.cancel.setOnClickListener {
             dismissAllowingStateLoss()
         }
 
-        binding?.save?.setOnClickListener {
-            val name = binding?.presetNameInput?.text?.toString()?.trim() ?: ""
+        binding.save.setOnClickListener {
+            val name = binding.presetNameInput.text.toString().trim()
             if (name.isNotEmpty()) {
-                onSave?.invoke(name)
+                onSave?.invoke(name, currentCategory)
                 dismissAllowingStateLoss()
             } else {
                 // Gently shake the input field to hint that a name is required.
-                binding?.presetNameInput?.animate()
-                    ?.translationX(10f)?.setDuration(50)
-                    ?.withEndAction {
-                        binding?.presetNameInput?.animate()
-                            ?.translationX(-10f)?.setDuration(50)
-                            ?.withEndAction {
-                                binding?.presetNameInput?.animate()
-                                    ?.translationX(0f)?.setDuration(50)?.start()
-                            }?.start()
-                    }?.start()
+                binding.presetNameInput.shakeView()
             }
         }
     }
 
-    override fun onDestroyView() {
-        super.onDestroyView()
-        binding = null
+    private fun updateCategoryUi() {
+        binding.categorySavedPresets.setUseAccentColor(currentCategory == EqualizerPreset.CATEGORY_SAVED_PRESETS)
+        binding.categoryHeadphoneProfiles.setUseAccentColor(currentCategory == EqualizerPreset.CATEGORY_HEADPHONE_PROFILES)
     }
 
     companion object {
@@ -92,9 +99,9 @@ class SaveEqualizerPreset : ScopedBottomSheetFragment() {
         /**
          * Shows the "Save Preset" dialog from a [FragmentManager].
          *
-         * @param onSave Called with the trimmed preset name when the user confirms.
+         * @param onSave Called with the trimmed preset name and category when the user confirms.
          */
-        fun FragmentManager.showSaveEqualizerPreset(onSave: (String) -> Unit) {
+        fun FragmentManager.showSaveEqualizerPreset(onSave: (String, String) -> Unit) {
             val fragment = newInstance()
             fragment.onSave = onSave
             fragment.show(this, TAG)

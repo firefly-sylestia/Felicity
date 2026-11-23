@@ -1,6 +1,8 @@
 package app.simple.felicity.ui.player
 
 import android.os.Bundle
+import android.transition.AutoTransition
+import android.transition.TransitionManager
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -10,6 +12,7 @@ import app.simple.felicity.databinding.FragmentDefaultPlayerBinding
 import app.simple.felicity.decorations.highlight.HighlightTextView
 import app.simple.felicity.decorations.lrc.view.LrcLineView
 import app.simple.felicity.decorations.pager.FelicityPager
+import app.simple.felicity.decorations.ripple.DynamicRippleImageButton
 import app.simple.felicity.decorations.seekbars.WaveformSeekbar
 import app.simple.felicity.decorations.views.FavoriteButton
 import app.simple.felicity.decorations.views.FelicityMediaControls
@@ -40,11 +43,11 @@ class DefaultPlayer : BasePlayerFragment() {
     override val mediaControls: FelicityMediaControls
         get() = binding.mediaControls
 
-    override val queue: View
-        get() = binding.queue
-
     override val search: View
         get() = binding.search
+
+    override val sleepTimer: DynamicRippleImageButton
+        get() = binding.sleepTimer
 
     override val menu: View
         get() = binding.menu
@@ -55,7 +58,7 @@ class DefaultPlayer : BasePlayerFragment() {
     override val pcmInfo: TextView
         get() = binding.pcmInfo
 
-    override val seekbar: WaveformSeekbar
+    override val waveformSeekbar: WaveformSeekbar
         get() = binding.seekbar
 
     override val lyrics: View
@@ -72,7 +75,6 @@ class DefaultPlayer : BasePlayerFragment() {
 
     override val visualizer: FelicityVisualizer
         get() = binding.visualizer
-
 
     override val title: TextView
         get() = binding.title
@@ -103,6 +105,18 @@ class DefaultPlayer : BasePlayerFragment() {
         lrc.setShowBackground(true)
     }
 
+    override fun fadeImmersiveViews(show: Boolean, animate: Boolean) {
+        super.fadeImmersiveViews(show, animate)
+
+        if (animate) {
+            val transition = AutoTransition()
+            transition.duration = 500L
+            TransitionManager.beginDelayedTransition(binding.root, transition)
+        }
+
+        binding.stripContainer.visibility = if (show) View.VISIBLE else View.GONE
+    }
+
     companion object {
         /**
          * Creates a new instance of [DefaultPlayer] with an empty argument bundle.
@@ -115,7 +129,6 @@ class DefaultPlayer : BasePlayerFragment() {
             fragment.arguments = args
             return fragment
         }
-
 
         const val TAG = "DefaultPlayer"
     }

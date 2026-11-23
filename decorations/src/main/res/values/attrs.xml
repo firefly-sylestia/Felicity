@@ -47,6 +47,7 @@
             <flag name="quaternary" value="4" />
             <flag name="accent" value="5" />
             <flag name="white" value="6" />
+            <flag name="secondary_white" value="7" />
         </attr>
 
         <attr name="drawableTintStyle" format="string">
@@ -191,6 +192,8 @@
         <attr name="felicitySwitchChecked" format="boolean" />
         <!-- Elevation to apply when checked; 0 when unchecked -->
         <attr name="felicitySwitchCheckedElevation" format="dimension" />
+        <!-- Whether to disable ancestor clipping (clipChildren, clipToPadding, clipToOutline) to let shadows and animations overflow. Default is true. -->
+        <attr name="felicitySwitchDisableAncestorClipping" format="boolean" />
     </declare-styleable>
 
     <declare-styleable name="AppHeader">
@@ -484,12 +487,11 @@
             1.0 = full dimension (default). 0.5 = half the available length.
         -->
         <attr name="vizMaxRenderHeight" format="float" />
-        <!-- Whether the ash/snow particle emitter is enabled. Default: false. -->
-        <attr name="vizParticlesEnabled" format="boolean" />
         <!-- Selects the initial rendering mode. Default: bars. -->
         <attr name="vizMode" format="enum">
             <enum name="bars" value="0" />
             <enum name="wave" value="1" />
+            <enum name="blocks" value="2" />
         </attr>
         <!--
             Controls the direction from which bars and waves emerge.

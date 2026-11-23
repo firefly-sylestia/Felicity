@@ -6,12 +6,14 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.ImageView
 import android.widget.TextView
+import app.simple.felicity.core.singletons.AppOrientation
 import app.simple.felicity.databinding.FragmentPlayerCarouselBinding
 import app.simple.felicity.databinding.FragmentPlayerFadedWaveformBinding
 import app.simple.felicity.decorations.highlight.HighlightTextView
 import app.simple.felicity.decorations.lrc.view.LrcLineView
 import app.simple.felicity.decorations.pager.CarouselTransformers
 import app.simple.felicity.decorations.pager.FelicityPager
+import app.simple.felicity.decorations.ripple.DynamicRippleImageButton
 import app.simple.felicity.decorations.seekbars.WaveformSeekbar
 import app.simple.felicity.decorations.views.FavoriteButton
 import app.simple.felicity.decorations.views.FelicityMediaControls
@@ -42,11 +44,11 @@ class CarouselPlayer : BasePlayerFragment() {
     override val mediaControls: FelicityMediaControls
         get() = binding.mediaControls
 
-    override val queue: View
-        get() = binding.queue
-
     override val search: View
         get() = binding.search
+
+    override val sleepTimer: DynamicRippleImageButton
+        get() = binding.sleepTimer
 
     override val menu: View
         get() = binding.menu
@@ -57,7 +59,7 @@ class CarouselPlayer : BasePlayerFragment() {
     override val pcmInfo: TextView
         get() = binding.pcmInfo
 
-    override val seekbar: WaveformSeekbar
+    override val waveformSeekbar: WaveformSeekbar
         get() = binding.seekbar
 
     override val lyrics: View
@@ -102,6 +104,8 @@ class CarouselPlayer : BasePlayerFragment() {
 
         binding.pager.setCarouselSidePagesVisible(visible = true)
         binding.pager.carouselPageTransformer = CarouselTransformers.depth
+
+        lrc.setShowBackground(AppOrientation.isLandscape())
     }
 
     companion object {

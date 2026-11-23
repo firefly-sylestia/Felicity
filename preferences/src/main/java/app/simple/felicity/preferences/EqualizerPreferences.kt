@@ -2,13 +2,6 @@
 
 import androidx.core.content.edit
 import app.simple.felicity.manager.SharedPreferences
-import app.simple.felicity.preferences.EqualizerPreferences.EQ_BAND_KEY_PREFIX
-import app.simple.felicity.preferences.EqualizerPreferences.EQ_MODE_GRAPHIC
-import app.simple.felicity.preferences.EqualizerPreferences.EQ_MODE_PARAMETRIC
-import app.simple.felicity.preferences.EqualizerPreferences.REPLAY_GAIN_MODE
-import app.simple.felicity.preferences.EqualizerPreferences.REPLAY_GAIN_MODE_ALBUM
-import app.simple.felicity.preferences.EqualizerPreferences.REPLAY_GAIN_MODE_TRACK
-import app.simple.felicity.preferences.EqualizerPreferences.REVERB_DECAY
 
 /**
  * Manages all equalizer-related audio processing preferences for the Felicity playback engine.
@@ -136,14 +129,6 @@ object EqualizerPreferences {
     const val PITCH_SPEED_LOCKED = "eq_pitch_speed_locked"
 
     /**
-     * Manual replay gain offset stored as a float in [-15 .. +15] dB.
-     * 0.0 dB = unity gain (no change, default). Use this to level-match tracks that
-     * were mastered at different loudness targets, or to compensate for clipping on
-     * very loud recordings. Applied as a simple linear multiply before the DSP chain.
-     */
-    const val REPLAY_GAIN_DB = "eq_replay_gain_db"
-
-    /**
      * Boolean flag that enables automatic ReplayGain from file tags.
      * When true, the gain embedded in REPLAYGAIN_TRACK_GAIN or REPLAYGAIN_ALBUM_GAIN
      * (depending on [REPLAY_GAIN_MODE]) is applied automatically on each track change.
@@ -175,6 +160,12 @@ object EqualizerPreferences {
      * Stored here so the PEQ state survives app restarts just like the graphic EQ gains do.
      */
     const val PEQ_BANDS_RAW = "eq_peq_bands_raw"
+
+    /**
+     * Stores the last selected tab in the Presets screen.
+     * Either "SAVED_PRESETS" or "HEADPHONE_PROFILES".
+     */
+    const val PRESETS_LIST_TYPE = "presets_list_type"
 
     fun setBalance(pan: Float) {
         SharedPreferences.getSharedPreferences().edit { putFloat(BALANCE, pan.coerceIn(-1f, 1f)) }
@@ -455,22 +446,7 @@ object EqualizerPreferences {
         return SharedPreferences.getSharedPreferences().getFloat(PLAYBACK_SPEED, 1.0f)
     }
 
-    /**
-     * Persists the manual replay gain offset in dB, clamped to [-15 .. +15].
-     *
-     * @param db Gain offset in dB. 0.0 = unity (no change in loudness).
-     */
-    fun setReplayGainDb(db: Float) {
-        SharedPreferences.getSharedPreferences().edit { putFloat(REPLAY_GAIN_DB, db.coerceIn(-15f, 15f)) }
-    }
 
-    /**
-     * Returns the persisted manual replay gain offset in dB.
-     * Defaults to 0.0 dB (unity) when no value has been saved yet.
-     */
-    fun getReplayGainDb(): Float {
-        return SharedPreferences.getSharedPreferences().getFloat(REPLAY_GAIN_DB, 0f)
-    }
     fun setAutoReplayGainEnabled(enabled: Boolean) {
         SharedPreferences.getSharedPreferences().edit { putBoolean(AUTO_REPLAY_GAIN_ENABLED, enabled) }
     }
@@ -533,5 +509,20 @@ object EqualizerPreferences {
      */
     fun getPeqBandsRaw(): String? {
         return SharedPreferences.getSharedPreferences().getString(PEQ_BANDS_RAW, null)
+    }
+
+    /**
+     * Persists the last selected tab in the Equalizer Presets screen.
+     */
+    fun setPresetsListType(type: String) {
+        SharedPreferences.getSharedPreferences().edit { putString(PRESETS_LIST_TYPE, type) }
+    }
+
+    /**
+     * Retrieves the last selected tab in the Equalizer Presets screen.
+     * Defaults to "SAVED_PRESETS".
+     */
+    fun getPresetsListType(): String {
+        return SharedPreferences.getSharedPreferences().getString(PRESETS_LIST_TYPE, "SAVED_PRESETS") ?: "SAVED_PRESETS"
     }
 }

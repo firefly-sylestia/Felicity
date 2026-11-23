@@ -13,15 +13,15 @@ import androidx.recyclerview.widget.GridLayoutManager
 import app.simple.felicity.R
 import app.simple.felicity.adapters.ui.lists.AdapterLrcSearch
 import app.simple.felicity.databinding.FragmentLyricsSearchBinding
-import app.simple.felicity.databinding.HeaderGenericSearchBinding
+import app.simple.felicity.databinding.HeaderLyricsSearchBinding
 import app.simple.felicity.decorations.views.AppHeader
 import app.simple.felicity.extensions.fragments.MediaFragment
 import app.simple.felicity.repository.constants.BundleConstants
 import app.simple.felicity.repository.models.Audio
-import app.simple.felicity.ui.subpanels.LyricsSearch.Companion.REQUEST_KEY_LYRICS_FOR_EDITOR
 import app.simple.felicity.utils.ParcelUtils.parcelable
 import app.simple.felicity.viewmodels.panels.LyricsSearchViewModel
 import dagger.hilt.android.AndroidEntryPoint
+import kotlin.math.abs
 
 /**
  * Panel that allows the user to search for and download LRC lyrics from LrcLib.
@@ -40,7 +40,7 @@ import dagger.hilt.android.AndroidEntryPoint
 class LyricsSearch : MediaFragment() {
 
     private lateinit var binding: FragmentLyricsSearchBinding
-    private lateinit var headerBinding: HeaderGenericSearchBinding
+    private lateinit var headerBinding: HeaderLyricsSearchBinding
 
     private var adapterLrcSearch: AdapterLrcSearch? = null
 
@@ -64,7 +64,7 @@ class LyricsSearch : MediaFragment() {
 
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View {
         binding = FragmentLyricsSearchBinding.inflate(inflater, container, false)
-        headerBinding = HeaderGenericSearchBinding.inflate(inflater, container, false)
+        headerBinding = HeaderLyricsSearchBinding.inflate(inflater, container, false)
         return binding.root
     }
 
@@ -89,6 +89,7 @@ class LyricsSearch : MediaFragment() {
             headerBinding.editText.setSelection(keyword.length)
             isProgrammaticTextSet = false
             viewModel.setUserKeyword(keyword)
+            viewModel.targetDuration = audio.duration
             viewModel.searchWithCurrentKeyword()
         }
     }
@@ -138,9 +139,9 @@ class LyricsSearch : MediaFragment() {
             if (isLoading) {
                 headerBinding.count.text = getString(R.string.loading)
             } else {
-                // If loading just finished and there are no results, show "No lyrics found".
+                // If loading just finished and there are no results, show why (error code or "No lyrics found").
                 if (viewModel.searchResults.value.isNullOrEmpty()) {
-                    headerBinding.count.text = getString(R.string.no_lyrics_found)
+                    headerBinding.count.text = emptyResultsText()
                 }
             }
         }
@@ -152,12 +153,26 @@ class LyricsSearch : MediaFragment() {
             val isLoading = viewModel.isLoading.value ?: false
 
             headerBinding.count.text = if (results.isNotEmpty()) {
+                val targetDurationSec = viewModel.targetDuration / 1000.0
+                val bestMatchCount = results.count {
+                    abs(it.duration - targetDurationSec) <= 5.0
+                }
+
+                if (bestMatchCount > 0) {
+                    headerBinding.bestMatches.isVisible = true
+                    headerBinding.bestMatches.text = resources.getQuantityString(R.plurals.best_matches, bestMatchCount, bestMatchCount)
+                } else {
+                    headerBinding.bestMatches.isVisible = false
+                }
+
                 getString(R.string.x_results, results.size)
             } else {
+                headerBinding.bestMatches.isVisible = false
+
                 if (isLoading) {
                     getString(R.string.loading)
                 } else {
-                    getString(R.string.no_lyrics_found)
+                    emptyResultsText()
                 }
             }
         }
@@ -178,24 +193,31 @@ class LyricsSearch : MediaFragment() {
         }
     }
 
+    private fun emptyResultsText(): String {
+        return viewModel.errorCode.value ?: getString(R.string.no_lyrics_found)
+    }
+
     private fun ensureAdapterCreated() {
         if (adapterLrcSearch == null) {
-            adapterLrcSearch = AdapterLrcSearch { lrcResponse ->
-                if (editorAudio != null) {
-                    // When opened from the editor, deliver the lyrics back via the
-                    // Fragment Result API so the editor can paste them into the field.
-                    parentFragmentManager.setFragmentResult(
-                            REQUEST_KEY_LYRICS_FOR_EDITOR,
-                            Bundle().apply {
-                                putString(KEY_PLAIN_LYRICS, lrcResponse.plainLyrics)
-                                putString(KEY_SYNCED_LYRICS, lrcResponse.syncedLyrics)
-                            }
-                    )
-                    goBack()
-                } else {
-                    viewModel.downloadAndSaveLrc(lrcResponse)
-                }
-            }
+            adapterLrcSearch = AdapterLrcSearch(
+                    targetDuration = viewModel.targetDuration,
+                    onItemClick = { lrcResponse ->
+                        if (editorAudio != null) {
+                            // When opened from the editor, deliver the lyrics back via the
+                            // Fragment Result API so the editor can paste them into the field.
+                            parentFragmentManager.setFragmentResult(
+                                    REQUEST_KEY_LYRICS_FOR_EDITOR,
+                                    Bundle().apply {
+                                        putString(KEY_PLAIN_LYRICS, lrcResponse.plainLyrics)
+                                        putString(KEY_SYNCED_LYRICS, lrcResponse.syncedLyrics)
+                                    }
+                            )
+                            goBack()
+                        } else {
+                            viewModel.downloadAndSaveLrc(lrcResponse)
+                        }
+                    }
+            )
             binding.recyclerView.adapter = adapterLrcSearch
         }
     }
@@ -206,7 +228,9 @@ class LyricsSearch : MediaFragment() {
          * as a sidecar `.lrc` file next to the currently playing audio.
          */
         fun newInstance(): LyricsSearch {
-            return LyricsSearch().apply { arguments = Bundle() }
+            return LyricsSearch().apply {
+                arguments = Bundle()
+            }
         }
 
         /**
