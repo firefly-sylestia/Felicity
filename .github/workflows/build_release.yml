@@ -2,6 +2,11 @@ name: Build APKs (Release)
 
 on:
     workflow_dispatch:
+    # Run this release build once for the upstream sync workflow update.
+    push:
+        branches: [ master ]
+        paths:
+            - ".github/workflows/build_release.yml"
 
 permissions:
     contents: write
