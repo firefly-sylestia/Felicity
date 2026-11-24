@@ -60,9 +60,9 @@ jobs:
                 env:
                     SIGN_KEY: ${{ secrets.SIGN_KEY }}
                 run: |
-                    mkdir -p keystore
-                    echo "$SIGN_KEY" | base64 --decode > keystore/key.jks
-                    test -s keystore/key.jks
+                    mkdir -p "$HOME/work/_temp/keystore"
+                    echo "$SIGN_KEY" | base64 --decode > "$HOME/work/_temp/keystore/key.jks"
+                    test -s "$HOME/work/_temp/keystore/key.jks"
             -   name: Accept Android SDK licenses
                 run: yes | $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager --licenses
             -   name: Build arm64-v8a release APK
@@ -75,7 +75,6 @@ jobs:
                     SIGNING_KEY_ALIAS: ${{ secrets.ALIAS }}
                     SIGNING_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
                     SIGNING_STORE_PASSWORD: ${{ secrets.KEY_STORE_PASSWORD }}
-                    KEYSTORE_PATH: ${{ github.workspace }}/keystore/key.jks
             -   name: Rename APK to felicity-foss-arm64-v8a.apk
                 run: |
                     mkdir -p ${{ runner.temp }}/apks
