@@ -47,7 +47,7 @@ class Preference {
     }
 
     constructor(@StringRes title: Int,
-                summary: Any,
+                @StringRes summary: Any,
                 @DrawableRes icon: Int,
                 type: PreferenceType?,
                 onPreferenceAction: ((View, (Any?) -> Unit) -> Unit)?) {
