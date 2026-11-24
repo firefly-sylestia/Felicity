@@ -2,6 +2,8 @@ name: Build APKs (Release)
 
 on:
     workflow_dispatch:
+    release:
+        types: [published]
 
 permissions:
     contents: write
@@ -104,9 +106,9 @@ jobs:
                 env:
                     SIGN_KEY: ${{ secrets.SIGN_KEY }}
                 run: |
-                    mkdir -p keystore
-                    echo "$SIGN_KEY" | base64 --decode > keystore/key.jks
-                    test -s keystore/key.jks
+                    mkdir -p "$HOME/work/_temp/keystore"
+                    echo "$SIGN_KEY" | base64 --decode > "$HOME/work/_temp/keystore/key.jks"
+                    test -s "$HOME/work/_temp/keystore/key.jks"
             -   name: Accept Android SDK licenses
                 run: yes | $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager --licenses
             -   name: Build x86_64 release APK
@@ -119,7 +121,6 @@ jobs:
                     SIGNING_KEY_ALIAS: ${{ secrets.ALIAS }}
                     SIGNING_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
                     SIGNING_STORE_PASSWORD: ${{ secrets.KEY_STORE_PASSWORD }}
-                    KEYSTORE_PATH: ${{ github.workspace }}/keystore/key.jks
             -   name: Rename APK to felicity-foss-x86_64.apk
                 run: |
                     mkdir -p ${{ runner.temp }}/apks
@@ -149,9 +150,9 @@ jobs:
                 env:
                     SIGN_KEY: ${{ secrets.SIGN_KEY }}
                 run: |
-                    mkdir -p keystore
-                    echo "$SIGN_KEY" | base64 --decode > keystore/key.jks
-                    test -s keystore/key.jks
+                    mkdir -p "$HOME/work/_temp/keystore"
+                    echo "$SIGN_KEY" | base64 --decode > "$HOME/work/_temp/keystore/key.jks"
+                    test -s "$HOME/work/_temp/keystore/key.jks"
             -   name: Accept Android SDK licenses
                 run: yes | $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager --licenses
             -   name: Build armeabi-v7a release APK
@@ -164,7 +165,6 @@ jobs:
                     SIGNING_KEY_ALIAS: ${{ secrets.ALIAS }}
                     SIGNING_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
                     SIGNING_STORE_PASSWORD: ${{ secrets.KEY_STORE_PASSWORD }}
-                    KEYSTORE_PATH: ${{ github.workspace }}/keystore/key.jks
             -   name: Rename APK to felicity-foss-armeabi-v7a.apk
                 run: |
                     mkdir -p ${{ runner.temp }}/apks
@@ -194,9 +194,9 @@ jobs:
                 env:
                     SIGN_KEY: ${{ secrets.SIGN_KEY }}
                 run: |
-                    mkdir -p keystore
-                    echo "$SIGN_KEY" | base64 --decode > keystore/key.jks
-                    test -s keystore/key.jks
+                    mkdir -p "$HOME/work/_temp/keystore"
+                    echo "$SIGN_KEY" | base64 --decode > "$HOME/work/_temp/keystore/key.jks"
+                    test -s "$HOME/work/_temp/keystore/key.jks"
             -   name: Accept Android SDK licenses
                 run: yes | $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager --licenses
             -   name: Build x86 release APK
@@ -209,7 +209,6 @@ jobs:
                     SIGNING_KEY_ALIAS: ${{ secrets.ALIAS }}
                     SIGNING_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
                     SIGNING_STORE_PASSWORD: ${{ secrets.KEY_STORE_PASSWORD }}
-                    KEYSTORE_PATH: ${{ github.workspace }}/keystore/key.jks
             -   name: Rename APK to felicity-foss-x86.apk
                 run: |
                     mkdir -p ${{ runner.temp }}/apks
@@ -241,9 +240,9 @@ jobs:
                 env:
                     SIGN_KEY: ${{ secrets.SIGN_KEY }}
                 run: |
-                    mkdir -p keystore
-                    echo "$SIGN_KEY" | base64 --decode > keystore/key.jks
-                    test -s keystore/key.jks
+                    mkdir -p "$HOME/work/_temp/keystore"
+                    echo "$SIGN_KEY" | base64 --decode > "$HOME/work/_temp/keystore/key.jks"
+                    test -s "$HOME/work/_temp/keystore/key.jks"
             -   name: Accept Android SDK licenses
                 run: yes | $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager --licenses
             -   name: Build universal 64-bit release APK
@@ -256,7 +255,6 @@ jobs:
                     SIGNING_KEY_ALIAS: ${{ secrets.ALIAS }}
                     SIGNING_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
                     SIGNING_STORE_PASSWORD: ${{ secrets.KEY_STORE_PASSWORD }}
-                    KEYSTORE_PATH: ${{ github.workspace }}/keystore/key.jks
             -   name: Rename APK to felicity-foss-universal.apk
                 run: |
                     mkdir -p ${{ runner.temp }}/apks
@@ -288,9 +286,9 @@ jobs:
                 env:
                     SIGN_KEY: ${{ secrets.SIGN_KEY }}
                 run: |
-                    mkdir -p keystore
-                    echo "$SIGN_KEY" | base64 --decode > keystore/key.jks
-                    test -s keystore/key.jks
+                    mkdir -p "$HOME/work/_temp/keystore"
+                    echo "$SIGN_KEY" | base64 --decode > "$HOME/work/_temp/keystore/key.jks"
+                    test -s "$HOME/work/_temp/keystore/key.jks"
             -   name: Accept Android SDK licenses
                 run: yes | $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager --licenses
             -   name: Build play universal 64-bit release AAB
@@ -303,7 +301,6 @@ jobs:
                     SIGNING_KEY_ALIAS: ${{ secrets.ALIAS }}
                     SIGNING_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
                     SIGNING_STORE_PASSWORD: ${{ secrets.KEY_STORE_PASSWORD }}
-                    KEYSTORE_PATH: ${{ github.workspace }}/keystore/key.jks
             -   name: Rename AAB to felicity-play-universal.aab
                 run: |
                     mkdir -p ${{ runner.temp }}/aabs
